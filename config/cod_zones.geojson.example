@@ -1,0 +1,12 @@
+{
+  "_comment": "EXAMPLE STRUCTURE ONLY. Coordinates below are placeholders (0,0 region) and are NOT Amrit Dairy zones. Replace with owner-approved geometry, set owner_approved=true, rename to cod_zones.geojson. Zones without owner_approved=true are ignored.",
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"zone_id": "A", "name": "Sonipat Extended", "owner_approved": false, "approved_on": null, "approved_by": null},
+     "geometry": {"type": "Polygon", "coordinates": [[[0,0],[0.1,0],[0.1,0.1],[0,0.1],[0,0]]]}},
+    {"type": "Feature", "properties": {"zone_id": "B", "name": "Nindana 10 km", "owner_approved": false, "radius_km": 10, "approved_on": null, "approved_by": null},
+     "geometry": {"type": "Point", "coordinates": [0.0, 0.0]}},
+    {"type": "Feature", "properties": {"zone_id": "C", "name": "Meham-Bainsi local", "owner_approved": false, "approved_on": null, "approved_by": null},
+     "geometry": {"type": "Polygon", "coordinates": [[[0,0],[0.1,0],[0.1,0.1],[0,0.1],[0,0]]]}}
+  ]
+}

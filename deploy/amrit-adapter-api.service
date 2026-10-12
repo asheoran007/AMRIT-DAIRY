@@ -1,0 +1,16 @@
+# Alternative to Docker (bare systemd). Install: cp deploy/*.service /etc/systemd/system/ && systemctl enable --now amrit-adapter-api amrit-adapter-worker
+[Unit]
+Description=Amrit adapter API
+After=network-online.target
+[Service]
+User=adapter
+WorkingDirectory=/opt/amrit-adapter
+EnvironmentFile=/opt/amrit-adapter/.env
+ExecStart=/opt/amrit-adapter/.venv/bin/uvicorn amrit_adapter.api:app --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/amrit-adapter
+[Install]
+WantedBy=multi-user.target

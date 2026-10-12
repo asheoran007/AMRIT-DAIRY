@@ -1,0 +1,15 @@
+{$ADAPTER_HOST} {
+    encode gzip
+    # Only the routes the adapter exposes; everything else 404s at the edge.
+    @allowed path /health /webhooks/* /bot/turn/*
+    handle @allowed {
+        reverse_proxy api:8787
+    }
+    handle {
+        respond 404
+    }
+    log {
+        output file /data/access.log { roll_size 10mb roll_keep 5 }
+        format json
+    }
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Amrit adapter worker (inbox → outbox, 20 s poll)
+After=network-online.target amrit-adapter-api.service
+[Service]
+User=adapter
+WorkingDirectory=/opt/amrit-adapter
+EnvironmentFile=/opt/amrit-adapter/.env
+ExecStart=/opt/amrit-adapter/.venv/bin/python -m amrit_adapter.worker --loop 20
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/amrit-adapter
+[Install]
+WantedBy=multi-user.target

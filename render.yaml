@@ -1,0 +1,38 @@
+# Render Blueprint — single web service with the worker embedded + 1 GB persistent disk (SQLite). Lowest-cost Render layout.
+# Repository root = this folder (adapter/). Deploy: Render dashboard -> New -> Blueprint -> select the repo containing this file -> fill secret env vars -> Apply.
+# Then: Settings -> Custom Domains -> adapter.amritdairy.in (Render issues TLS) and add the CNAME at GoDaddy.
+services:
+  - type: web
+    name: amrit-adapter
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    plan: starter            # paid plan required for a persistent disk and no spin-down
+    region: singapore        # closest Render region to India
+    healthCheckPath: /health
+    autoDeploy: false        # deploy only when the owner clicks Deploy (change control)
+    disk:
+      name: adapter-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: ADAPTER_DATABASE_URL
+        value: sqlite:////data/adapter.db
+      - key: ADAPTER_EMBED_WORKER
+        value: "true"
+      - key: ADAPTER_BRAND_ID
+        value: amrit_dairy
+      - key: SHOPIFY_SHOP_DOMAIN
+        value: kmaz1y-dq.myshopify.com
+      - key: SENDER_MODE
+        value: dry_run
+      - key: GLOBAL_KILL_SWITCH
+        value: "true"
+      - key: TEST_PHONE_ALLOWLIST
+        value: "+918814869007"
+      - key: SHOPIFY_CLIENT_ID
+        sync: false          # entered in the dashboard, never in the repo
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
+      - key: INBOX_WEBHOOK_TOKEN
+        generateValue: true

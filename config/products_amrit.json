@@ -1,0 +1,190 @@
+{
+  "_status": "SYNCED 2026-10-12 from kmaz1y-dq.myshopify.com (Admin GraphQL, 20 active products; only ghee+honey sellable). No product VIDEO exists in Shopify media — media.approved stays false until the owner uploads/approves one. Prices tax-inclusive. channel_offers added 12 Oct (owner-approved WhatsApp discounts).",
+  "brand_id": "amrit_dairy",
+  "store_domain": "kmaz1y-dq.myshopify.com",
+  "currency": "INR",
+  "prices_tax_inclusive": true,
+  "products": [
+    {
+      "key": "ghee",
+      "title": "Amrit Desi Cow Golden Ghee",
+      "title_hi": "अमृत देसी गाय गोल्डन घी",
+      "product_id": "gid://shopify/Product/8743197474999",
+      "sku_prefix": "GH-001",
+      "keywords": [
+        "ghee",
+        "ghi",
+        "घी",
+        "bilona",
+        "बिलोना",
+        "desi ghee",
+        "cow ghee",
+        "golden ghee",
+        "गोल्डन घी"
+      ],
+      "short_hi": "देसी गाय के दूध से पारंपरिक बिलोना विधि से बना शुद्ध दानेदार घी।",
+      "media": {
+        "video_url": null,
+        "image_url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/amrit-desi-cow-ghee-hero_60e14268-3100-4935-9b25-9ca4e90a1430.jpg?v=1791058383",
+        "approved": false
+      },
+      "delivery_class": "courier",
+      "restricted": false,
+      "approved_for_sale": true,
+      "verified_from_shopify": true,
+      "variants": [
+        {
+          "label": "1 Ltr",
+          "label_hi": "1 लीटर",
+          "variant_id": "gid://shopify/ProductVariant/49099713773751",
+          "sku": "GH-001",
+          "price_minor": 350000,
+          "available": true
+        },
+        {
+          "label": "5 Ltr",
+          "label_hi": "5 लीटर",
+          "variant_id": "gid://shopify/ProductVariant/49108524466359",
+          "sku": "GH-005",
+          "price_minor": 1750000,
+          "available": true
+        },
+        {
+          "label": "10 Ltr",
+          "label_hi": "10 लीटर",
+          "variant_id": "gid://shopify/ProductVariant/49108524499127",
+          "sku": "GH-010",
+          "price_minor": 3300000,
+          "available": true
+        }
+      ]
+    },
+    {
+      "key": "honey",
+      "title": "Amrit Natural Raw Forest Honey",
+      "title_hi": "अमृत नेचुरल रॉ फ़ॉरेस्ट शहद",
+      "product_id": "gid://shopify/Product/8743197671607",
+      "sku_prefix": null,
+      "keywords": [
+        "honey",
+        "shahad",
+        "शहद",
+        "madhu",
+        "मधु",
+        "forest honey",
+        "raw honey"
+      ],
+      "short_hi": "असली स्वाद वाला नेचुरल रॉ फ़ॉरेस्ट शहद — बिना मिलावट।",
+      "media": {
+        "video_url": null,
+        "image_url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/amrit-natural-raw-forest-honey-hero_1482057c-cd69-4e26-8e30-ccd0c73a94e2.png?v=1791058405",
+        "approved": false
+      },
+      "delivery_class": "courier",
+      "restricted": false,
+      "approved_for_sale": true,
+      "verified_from_shopify": true,
+      "variants": [
+        {
+          "label": "250 gm",
+          "label_hi": "250 ग्राम",
+          "variant_id": "gid://shopify/ProductVariant/49290907713719",
+          "sku": "HN-250",
+          "price_minor": 40000,
+          "available": true
+        },
+        {
+          "label": "500 gm",
+          "label_hi": "500 ग्राम",
+          "variant_id": "gid://shopify/ProductVariant/49290907746487",
+          "sku": "HN-500",
+          "price_minor": 80000,
+          "available": true,
+          "_note": "owner rules ₹750 vs canned ₹800 — resolve from Shopify"
+        },
+        {
+          "label": "1 Kg",
+          "label_hi": "1 किलो",
+          "variant_id": "gid://shopify/ProductVariant/49099713970359",
+          "sku": "HN-1000",
+          "price_minor": 150000,
+          "available": true
+        }
+      ]
+    },
+    {
+      "key": "milk",
+      "title": "Amrit Dairy Desi Cow Milk",
+      "title_hi": "अमृत देसी गाय दूध",
+      "product_id": "gid://shopify/Product/8743196197047",
+      "keywords": [
+        "milk",
+        "doodh",
+        "dudh",
+        "दूध",
+        "a2 milk"
+      ],
+      "short_hi": "ताज़ा देसी गाय का दूध — केवल सोनीपत के कुछ स्थानीय क्षेत्रों में।",
+      "media": {
+        "video_url": null,
+        "image_url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/cow-milk.webp?v=1788263912",
+        "approved": false
+      },
+      "delivery_class": "local_only",
+      "restricted": false,
+      "approved_for_sale": false,
+      "verified_from_shopify": false,
+      "variants": []
+    },
+    {
+      "key": "cow",
+      "title": "Cow enquiry (registry)",
+      "title_hi": "गाय ख़रीद / बिक्री",
+      "keywords": [
+        "cow",
+        "gaay",
+        "gay",
+        "गाय",
+        "gir",
+        "sahiwal",
+        "साहीवाल",
+        "गीर"
+      ],
+      "delivery_class": "registry",
+      "restricted": true,
+      "approved_for_sale": false,
+      "verified_from_shopify": false,
+      "variants": []
+    }
+  ],
+  "channel_offers": {
+    "_status": "OWNER-APPROVED 2026-10-12 08:19 IST (WhatsApp channel only; Shopify list prices unchanged). Applied as a titled order-level discount on the Shopify draft order so the invoice total equals the quoted price.",
+    "_pending": "25 Ltr: owner wrote '200 off last 500 of on 25 ltr' — read as ₹200 off per litre (₹5,000) but NO 25 Ltr variant exists in Shopify; rule stays inactive until the owner creates the variant and confirms the wording.",
+    "ghee": {
+      "5 Ltr": {
+        "per_unit_minor": 50000,
+        "title": "WhatsApp offer: ₹500 off 5 Ltr",
+        "approved": true
+      },
+      "10 Ltr": {
+        "per_unit_minor": 100000,
+        "title": "WhatsApp offer: ₹100/L off 10 Ltr",
+        "approved": true
+      },
+      "25 Ltr": {
+        "per_unit_minor": 500000,
+        "title": "WhatsApp offer: ₹200/L off 25 Ltr",
+        "approved": false,
+        "_note": "no Shopify variant; wording unconfirmed"
+      }
+    }
+  },
+  "brand_video": {
+    "url": "https://youtu.be/BAnglrsKYuw",
+    "title": "Welcome to Amrit Dairy",
+    "channel": "Amrit Dairy",
+    "source": "owner's Welcome canned response (support console), verified via YouTube oEmbed 12 Oct 2026",
+    "approved": true,
+    "delivery": "link (WhatsApp cannot play YouTube inline; a native video message needs an MP4 uploaded to Shopify product media → media.video_url)"
+  }
+}

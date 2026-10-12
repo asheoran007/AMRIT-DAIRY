@@ -1,0 +1,8 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+sqlalchemy==2.0.40
+pydantic==2.11.4
+pydantic-settings==2.9.1
+httpx==0.28.1
+shapely==2.1.0
+pytest==8.3.5

@@ -1,0 +1,126 @@
+[
+ {
+  "id": "gid://shopify/Product/8743197474999",
+  "title": "Amrit Desi Cow Golden Ghee",
+  "tags": [
+   "bestseller",
+   "ghee",
+   "pantry"
+  ],
+  "media": {
+   "nodes": [
+    {
+     "mediaContentType": "IMAGE",
+     "image": {
+      "url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/amrit-desi-cow-ghee-hero_60e14268-3100-4935-9b25-9ca4e90a1430.jpg?v=1791058383"
+     }
+    }
+   ]
+  },
+  "variants": {
+   "nodes": [
+    {
+     "id": "gid://shopify/ProductVariant/49099713773751",
+     "sku": "GH-001",
+     "title": "1 Ltr",
+     "price": "3500.00",
+     "availableForSale": true,
+     "inventoryQuantity": 951
+    },
+    {
+     "id": "gid://shopify/ProductVariant/49108524466359",
+     "sku": "GH-005",
+     "title": "5 Ltr",
+     "price": "17500.00",
+     "availableForSale": true,
+     "inventoryQuantity": 100
+    },
+    {
+     "id": "gid://shopify/ProductVariant/49108524499127",
+     "sku": "GH-010",
+     "title": "10 Ltr",
+     "price": "33000.00",
+     "availableForSale": true,
+     "inventoryQuantity": 100
+    }
+   ]
+  }
+ },
+ {
+  "id": "gid://shopify/Product/8743197671607",
+  "title": "Amrit Natural Raw Forest Honey",
+  "tags": [
+   "honey",
+   "pantry"
+  ],
+  "media": {
+   "nodes": [
+    {
+     "mediaContentType": "IMAGE",
+     "image": {
+      "url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/amrit-natural-raw-forest-honey-hero_1482057c-cd69-4e26-8e30-ccd0c73a94e2.png?v=1791058405"
+     }
+    }
+   ]
+  },
+  "variants": {
+   "nodes": [
+    {
+     "id": "gid://shopify/ProductVariant/49290907713719",
+     "sku": "HN-250",
+     "title": "250 gm",
+     "price": "400.00",
+     "availableForSale": true,
+     "inventoryQuantity": 1000
+    },
+    {
+     "id": "gid://shopify/ProductVariant/49290907746487",
+     "sku": "HN-500",
+     "title": "500 gm",
+     "price": "800.00",
+     "availableForSale": true,
+     "inventoryQuantity": 1000
+    },
+    {
+     "id": "gid://shopify/ProductVariant/49099713970359",
+     "sku": "HN-1000",
+     "title": "1 Kg",
+     "price": "1500.00",
+     "availableForSale": true,
+     "inventoryQuantity": 7
+    }
+   ]
+  }
+ },
+ {
+  "id": "gid://shopify/Product/8743196197047",
+  "title": "Amrit Dairy Desi Cow Milk",
+  "tags": [
+   "coming-soon",
+   "dairy",
+   "milk"
+  ],
+  "media": {
+   "nodes": [
+    {
+     "mediaContentType": "IMAGE",
+     "image": {
+      "url": "https://cdn.shopify.com/s/files/1/0763/7840/7095/files/cow-milk.webp?v=1788263912"
+     }
+    }
+   ]
+  },
+  "variants": {
+   "nodes": [
+    {
+     "id": "gid://shopify/ProductVariant/49099712430263",
+     "sku": null,
+     "title": "1 L",
+     "price": "100.00",
+     "availableForSale": false,
+     "inventoryQuantity": 0
+    }
+   ]
+  }
+ }
+]
