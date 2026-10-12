@@ -61,8 +61,9 @@ def test_start_uses_render_host_before_custom_domain_dns(monkeypatch):
     assert "redirect_uri=https%3A%2F%2Fadapter.amritdairy.in%2Fshopify%2Fauth%2Fcallback" in r.headers["location"]
 
 
-def test_start_accepts_shopify_signed_app_url_load_but_not_forgeries(monkeypatch):
-    """Shopify opens the App URL with ?shop&hmac&timestamp&host signed with the client secret: that starts OAuth too."""
+def test_start_accepts_shopify_signed_app_url_load_and_masked_form_but_not_forgeries(monkeypatch):
+    """Shopify opens the App URL with ?shop&hmac&timestamp&host signed with the client secret: that starts OAuth too.
+    The owner's masked form POSTs the token (never in a URL). Forgeries and empty requests get 401."""
     import amrit_adapter.api as api
     from amrit_adapter.config import settings
     monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "shopify_shop_domain", "kmaz1y-dq.myshopify.com")
@@ -79,3 +80,8 @@ def test_start_accepts_shopify_signed_app_url_load_but_not_forgeries(monkeypatch
     stale = dict(p, timestamp=str(int(time.time()) - 3600)); stale["hmac"] = _sign(stale, "cs")
     assert c.get("/shopify/auth/start", params=stale, follow_redirects=False).status_code == 401                        # replay
     assert c.get("/shopify/auth/start", follow_redirects=False).status_code == 401                                      # nothing
+    # masked owner form: GET renders a password field, POST with the right token -> 302, wrong -> 401
+    page = c.get("/shopify/auth"); assert page.status_code == 200 and "type=password" in page.text and "t0k" not in page.text
+    r = c.post("/shopify/auth/start", content="token=t0k", headers={"content-type": "application/x-www-form-urlencoded"}, follow_redirects=False)
+    assert r.status_code == 302 and "t0k" not in r.headers["location"]
+    assert c.post("/shopify/auth/start", content="token=nope", headers={"content-type": "application/x-www-form-urlencoded"}, follow_redirects=False).status_code == 401

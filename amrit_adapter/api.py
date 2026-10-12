@@ -113,14 +113,38 @@ def _public_base(request: Request) -> str:
 
 @app.get("/shopify/auth/start")
 def shopify_auth_start(request: Request, token: str = "") -> Response:
-    """Begins the authorization-code grant (custom distribution). Two accepted entries:
-    (a) owner link  ?token=<INBOX_WEBHOOK_TOKEN>;
+    """Begins the authorization-code grant (custom distribution). Accepted entries:
+    (a) owner link  ?token=<INBOX_WEBHOOK_TOKEN>  (or the masked form at GET/POST /shopify/auth - token never in a URL);
     (b) Shopify app-URL load: Shopify opens the configured App URL with ?shop&hmac&timestamp(&host) signed with the
         client secret (same scheme as the OAuth callback) - the documented install entry point, no shared secret in any link."""
+    return _start_grant(request, token, {k: v for k, v in request.query_params.items()})
+
+
+@app.get("/shopify/auth")
+def shopify_auth_form() -> Response:
+    """Owner install page: a masked field for the inbox token (paste from Render 'Copy value'), POSTed - never in a URL,
+    never readable from a screenshot. Submitting runs the same token check as /shopify/auth/start."""
+    html = ("<!doctype html><meta name=viewport content='width=device-width'><title>Amrit adapter - install Shopify app</title>"
+            "<body style='font-family:system-ui;max-width:28rem;margin:3rem auto;padding:0 1rem'>"
+            "<h2>Install Amrit adapter on Shopify</h2><p>Paste the <b>INBOX_WEBHOOK_TOKEN</b> (Render &rarr; Environment &rarr; Copy value). "
+            "It is sent once, masked, and only used to start Shopify's own approval screen.</p>"
+            "<form method=post action='/shopify/auth/start'><input type=password name=token autocomplete=off required "
+            "style='width:100%;padding:.6rem;font-size:1rem' placeholder='paste token'> "
+            "<button style='margin-top:1rem;padding:.6rem 1.2rem;font-size:1rem'>Continue to Shopify approval</button></form></body>")
+    return Response(content=html, media_type="text/html")
+
+
+@app.post("/shopify/auth/start")
+async def shopify_auth_start_post(request: Request) -> Response:
+    from urllib.parse import parse_qs
+    body = (await request.body())[:4096].decode("utf-8", "ignore")   # application/x-www-form-urlencoded, no multipart dep
+    return _start_grant(request, parse_qs(body).get("token", [""])[0].strip(), {})
+
+
+def _start_grant(request: Request, token: str, params: dict[str, str]) -> Response:
     import hmac as _h
     from fastapi.responses import RedirectResponse
     from .engine import shopify_oauth as so
-    params = {k: v for k, v in request.query_params.items()}
     owner_ok = bool(settings.inbox_webhook_token) and bool(token) and _h.compare_digest(token, settings.inbox_webhook_token)
     shopify_ok = (params.get("shop") == settings.shopify_shop_domain and bool(settings.shopify_client_secret)
                   and so.verify_callback_hmac({k: v for k, v in params.items() if k != "token"}, settings.shopify_client_secret)
