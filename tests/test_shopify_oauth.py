@@ -47,3 +47,15 @@ def test_full_install_flow_stores_offline_token_and_provider_uses_it(monkeypatch
     assert settings._stored_token == "shpat_offline" and settings.shopify_auth_mode == "offline_token"
     assert settings.shopify_token_provider().token() == "shpat_offline"       # no client-credentials call needed
     assert c.get("/health").json()["shopify"] == "offline_token"
+
+
+def test_start_uses_render_host_before_custom_domain_dns(monkeypatch):
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "shopify_shop_domain", "kmaz1y-dq.myshopify.com")
+    monkeypatch.setattr(settings, "shopify_client_id", "cid"); monkeypatch.setattr(settings, "adapter_public_url", "https://adapter.amritdairy.in")
+    c = TestClient(api.app)
+    r = c.get("/shopify/auth/start?token=t0k", headers={"host": "amrit-adapter.onrender.com"}, follow_redirects=False)
+    assert "redirect_uri=https%3A%2F%2Famrit-adapter.onrender.com%2Fshopify%2Fauth%2Fcallback" in r.headers["location"]
+    r = c.get("/shopify/auth/start?token=t0k", headers={"host": "evil.example"}, follow_redirects=False)
+    assert "redirect_uri=https%3A%2F%2Fadapter.amritdairy.in%2Fshopify%2Fauth%2Fcallback" in r.headers["location"]

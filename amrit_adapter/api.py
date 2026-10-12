@@ -101,19 +101,30 @@ async def bot_turn(token: str, request: Request) -> Response:
                                       "handoff": r.handoff, "handoff_team": r.handoff_team}, ensure_ascii=False))
 
 
+def _public_base(request: Request) -> str:
+    """Base URL for OAuth redirects: the configured public URL, or the request host when it is this service's Render
+    hostname (lets the install run before the custom domain's DNS is live). Anything else falls back to the configured URL."""
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    cfg = settings.adapter_public_url.rstrip("/")
+    if host and (host.endswith(".onrender.com") or (cfg and host == cfg.split("://", 1)[-1])):
+        return f"https://{host}"
+    return cfg
+
+
 @app.get("/shopify/auth/start")
-def shopify_auth_start(token: str = "") -> Response:
+def shopify_auth_start(request: Request, token: str = "") -> Response:
     """Owner-only: begins the authorization-code grant (custom distribution). Protected by the inbox token."""
     import hmac as _h
     from fastapi.responses import RedirectResponse
     from .engine import shopify_oauth as so
     if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
         return Response(status_code=401, content="bad token")
-    if not (settings.shopify_client_id and settings.shopify_shop_domain and settings.adapter_public_url):
+    base = _public_base(request)
+    if not (settings.shopify_client_id and settings.shopify_shop_domain and base):
         return Response(status_code=500, content="SHOPIFY_CLIENT_ID / SHOPIFY_SHOP_DOMAIN / ADAPTER_PUBLIC_URL not configured")
     state = so.make_state(settings.inbox_webhook_token, settings.shopify_shop_domain)
     return RedirectResponse(so.authorize_url(settings.shopify_shop_domain, settings.shopify_client_id,
-                                             settings.adapter_public_url.rstrip("/") + "/shopify/auth/callback", state), status_code=302)
+                                             base + "/shopify/auth/callback", state), status_code=302)
 
 
 @app.get("/shopify/auth/callback")
