@@ -10,6 +10,8 @@ services:
     plan: starter            # paid plan required for a persistent disk and no spin-down
     region: singapore        # closest Render region to India
     healthCheckPath: /health
+    domains:
+      - adapter.amritdairy.in   # CNAME adapter -> amrit-adapter.onrender.com at GoDaddy; Render issues the TLS cert
     autoDeploy: false        # deploy only when the owner clicks Deploy (change control)
     disk:
       name: adapter-data
