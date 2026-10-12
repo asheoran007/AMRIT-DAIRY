@@ -29,7 +29,9 @@ services:
       - key: ADAPTER_PUBLIC_URL
         value: https://adapter.amritdairy.in
       - key: SENDER_MODE
-        value: dry_run
+        value: dry_run            # dry_run | live_test (TEST_PHONE_ALLOWLIST only) | live
+      - key: CHATWOOT_API_TOKEN   # support console (chat.bitespeed.co) -> Profile settings -> Access Token; set in dashboard
+        sync: false
       - key: GLOBAL_KILL_SWITCH
         value: "true"
       - key: TEST_PHONE_ALLOWLIST

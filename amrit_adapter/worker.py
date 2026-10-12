@@ -2,7 +2,7 @@
 
 Run:  python -m amrit_adapter.worker --once      (one pass; use the OS scheduler for recurring runs)
       python -m amrit_adapter.worker --loop 30   (poll every 30 s)
-Sender is DryRunSender unless SENDER_MODE=live AND a verified BiteSpeed contract is implemented.
+Sender: DryRunSender unless SENDER_MODE=live|live_test AND CHATWOOT_API_TOKEN is set (see sender.py).
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from . import handlers, outbox, reports
 from .config import settings
 from .db import make_engine, migrate, now_iso, tx
 from .envelope import InternalEvent
-from .sender import DryRunSender, LiveBiteSpeedSender
+from .sender import ChatwootSender, DryRunSender, GuardedSender
 
 
 log = logging.getLogger("amrit.worker")
@@ -39,6 +39,14 @@ def build_policy() -> outbox.Policy:
         monthly_cap_minor=(settings.budget_monthly_cap_inr * 100) if settings.budget_monthly_cap_inr else None,
         kill_switch=settings.global_kill_switch,
     )
+
+
+def build_sender():
+    """Outbox sender under SENDER_MODE. Without CHATWOOT_API_TOKEN every mode degrades to dry-run (nothing can be delivered)."""
+    if settings.sender_mode in ("live", "live_test") and settings.chatwoot_api_token:
+        inner = ChatwootSender(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)
+        return GuardedSender(inner, settings.sender_mode, tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip()))
+    return DryRunSender()
 
 
 def build_shopify_client():
@@ -76,7 +84,7 @@ def one_pass(engine, sender, policy, shopify_client) -> None:
 
 def run_forever(engine, interval_s: int) -> None:
     """Used by the embedded-worker mode (API process) and by --loop. Never dies on a bad event: logged, retried next pass."""
-    sender = LiveBiteSpeedSender(settings.bitespeed_api_key) if settings.sender_mode == "live" else DryRunSender()
+    sender = build_sender()
     policy = build_policy()
     shopify_client = build_shopify_client()
     log.info("worker loop started interval=%ss shopify=%s", interval_s, "live" if shopify_client else "none")
@@ -100,7 +108,7 @@ def main() -> None:
     if args.loop and not args.once:
         run_forever(engine, args.loop)
         return
-    sender = LiveBiteSpeedSender(settings.bitespeed_api_key) if settings.sender_mode == "live" else DryRunSender()
+    sender = build_sender()
     one_pass(engine, sender, build_policy(), build_shopify_client())
 
 

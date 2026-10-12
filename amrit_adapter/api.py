@@ -43,7 +43,7 @@ def health() -> dict:
         queued = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status='queued'")).scalar()
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
-            "embedded_worker": settings.adapter_embed_worker,
+            "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
             "shopify": settings.shopify_auth_mode}
 
 
@@ -76,25 +76,40 @@ async def razorpay_webhook(request: Request) -> Response:
     return Response(status_code=200)   # Razorpay requires 2xx within 5 s
 
 
+def build_engine():
+    """Conversation engine over the live catalogue + Shopify (live client when a token is configured, else the fake)."""
+    from .engine.catalog import Catalog
+    from .engine.shopify_client import FakeShopifyClient, LiveShopifyClient
+    from .engine.state import Engine
+    shop = LiveShopifyClient(settings.shopify_shop_domain, auth=settings.shopify_token_provider()) if settings.shopify_configured else FakeShopifyClient()
+    return Engine(Catalog.load(), shop, settings.adapter_brand_id, _allowlist(), settings.test_payment_minor)
+
+
+def _allowlist() -> tuple[str, ...]:
+    return tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip())
+
+
+def _chatwoot():
+    from .conversation import ChatwootClient
+    if not settings.chatwoot_api_token:
+        return None
+    return ChatwootClient(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)
+
+
 @app.post("/bot/turn/{token}")
 async def bot_turn(token: str, request: Request) -> Response:
     """Called by a BiteSpeed flow 'API Call' node: {phone, text?, button_id?, name?} -> {state, messages[], actions[], handoff}.
     The flow renders messages[] (text/buttons/list/video) with its own Send/Quick-Reply/List nodes."""
     import hmac as _h
     import json as _j
-    from .engine.catalog import Catalog
-    from .engine.shopify_client import FakeShopifyClient, LiveShopifyClient
-    from .engine.state import Engine, render_plain
+    from .engine.state import render_plain
     if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
         return Response(status_code=401, content="bad token")
     body = _j.loads((await request.body()) or b"{}")
     phone = str(body.get("phone") or "").strip()
     if not phone.startswith("+"):
         phone = "+" + phone.lstrip("0")
-    cat = Catalog.load()
-    shop = LiveShopifyClient(settings.shopify_shop_domain, auth=settings.shopify_token_provider()) if settings.shopify_configured else FakeShopifyClient()
-    eng = Engine(cat, shop, settings.adapter_brand_id,
-                 tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip()), settings.test_payment_minor)
+    eng = build_engine()
     with tx(engine) as conn:
         r = eng.turn(conn, phone, body.get("text") or "", body.get("button_id"), body.get("name"))
     return Response(status_code=200, media_type="application/json",
@@ -205,8 +220,21 @@ async def inbox_webhook(token: str, request: Request) -> Response:
         ev = v.normalize_inbox_webhook(raw, settings.adapter_brand_id, level)
     except v.WebhookRejected as exc:
         return Response(status_code=401, content=str(exc))
+    import json as _j
+    from .conversation import handle_inbound
     with tx(engine) as conn:
-        persist_event(conn, ev)
+        res = persist_event(conn, ev)
+        if res.duplicate:
+            return Response(status_code=200, content="duplicate")
+        if ev.event_type == "bitespeed_inbox.message_created":
+            try:
+                out = handle_inbound(conn, ev.payload, build_engine, _chatwoot(), settings.sender_mode, _allowlist(),
+                                     settings.global_kill_switch)
+            except Exception:
+                log.exception("inbound message handling failed (event stays persisted)")
+                return Response(status_code=200, content="error-logged")
+            return Response(status_code=200, media_type="application/json",
+                            content=_j.dumps({"status": out.status, "reason": out.reason, "state": out.state}))
     return Response(status_code=200)
 
 

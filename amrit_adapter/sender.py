@@ -1,9 +1,10 @@
 """Outbound channel adapters.
 
-BiteSpeed: as of 2026-10-11 no public API / custom-event / send contract is documented (help centre and search
-checked; only a partner 'API key' is referenced by AppBrew's guide). Therefore the only implemented sender is
-DryRunSender. LiveBiteSpeedSender raises until a written contract (endpoint, auth, idempotency key, response
-ids, rate limits) is obtained from BiteSpeed and recorded in CAPABILITY-LIMITS.json.
+Conversational replies go out synchronously from the inbox webhook (conversation.py). This module serves the OUTBOX
+(scheduled/service jobs such as the paid-order confirmation): the BiteSpeed support console is Chatwoot, whose API is
+documented, so ChatwootSender finds the contact by phone, picks its latest conversation and posts an outgoing message.
+GuardedSender enforces SENDER_MODE (dry_run | live_test = TEST_PHONE_ALLOWLIST only | live) in front of it.
+BiteSpeed's own marketing/template send API has no public contract (checked 2026-10-11): LiveBiteSpeedSender still raises.
 """
 from __future__ import annotations
 
@@ -32,6 +33,64 @@ class DryRunSender:
     def send(self, action_key: str, payload: dict) -> SendResult:
         self.log.append((action_key, payload))
         return SendResult("dry_run", f"dryrun:{action_key}", 0, "simulated; nothing delivered")
+
+
+class ChatwootSender:
+    """Outbox -> Chatwoot: payload needs {"phone": "+91...", "message": "..."}; optional "conversation_id" skips the lookup."""
+
+    def __init__(self, base_url: str, account_id: int, api_token: str, timeout: float = 15.0) -> None:
+        import httpx
+        self._http = httpx
+        self.base = base_url.rstrip("/"); self.account_id = account_id; self.token = api_token; self.timeout = timeout
+
+    def _req(self, method: str, path: str, **kw):
+        r = self._http.request(method, f"{self.base}/api/v1/accounts/{self.account_id}{path}",
+                               headers={"api_access_token": self.token, "Content-Type": "application/json"}, timeout=self.timeout, **kw)
+        if r.status_code >= 300:
+            raise RuntimeError(f"chatwoot HTTP {r.status_code} on {path}")
+        return r.json()
+
+    def conversation_for_phone(self, phone: str) -> int | None:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        found = self._req("GET", "/contacts/search", params={"q": digits, "sort": "-last_activity_at"})
+        for c in (found.get("payload") or []):
+            if "".join(ch for ch in str(c.get("phone_number") or "") if ch.isdigit()).endswith(digits[-10:]):
+                convs = self._req("GET", f"/contacts/{c['id']}/conversations").get("payload") or []
+                convs = sorted(convs, key=lambda x: x.get("last_activity_at") or 0, reverse=True)
+                return convs[0]["id"] if convs else None
+        return None
+
+    def send(self, action_key: str, payload: dict) -> SendResult:
+        try:
+            conv = payload.get("conversation_id") or self.conversation_for_phone(str(payload.get("phone") or ""))
+            if not conv:
+                return SendResult("failed", None, 0, "no console conversation for this phone")
+            res = self._req("POST", f"/conversations/{conv}/messages",
+                            json={"content": payload.get("message") or "", "message_type": "outgoing", "private": False})
+            return SendResult("sent", f"chatwoot:{res.get('id')}", 0, f"conversation {conv}")
+        except Exception as exc:  # network ambiguity -> reconcile path, never blind retry
+            kind = type(exc).__name__
+            if "Timeout" in kind:
+                return SendResult("unknown_timeout", None, 0, f"{kind}: provider may have accepted the request")
+            return SendResult("failed", None, 0, f"{kind}: {exc}"[:200])
+
+
+class GuardedSender:
+    """SENDER_MODE in front of a live sender: dry_run -> never; live_test -> allowlisted phones only; live -> all."""
+
+    def __init__(self, inner: Sender, mode: str, allowlist: tuple[str, ...]) -> None:
+        self.inner, self.mode = inner, mode
+        self.allow = {"".join(ch for ch in a if ch.isdigit())[-10:] for a in allowlist}
+        self.dry = DryRunSender()
+
+    def send(self, action_key: str, payload: dict) -> SendResult:
+        if self.mode == "live":
+            return self.inner.send(action_key, payload)
+        phone = "".join(ch for ch in str(payload.get("phone") or "") if ch.isdigit())[-10:]
+        if self.mode == "live_test" and phone and phone in self.allow:
+            return self.inner.send(action_key, payload)
+        r = self.dry.send(action_key, payload)
+        return SendResult(r.outcome, r.provider_object_id, 0, f"{self.mode}: not delivered")
 
 
 class LiveBiteSpeedSender:

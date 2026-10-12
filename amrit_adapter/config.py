@@ -63,7 +63,12 @@ class Settings(BaseSettings):
     inbox_webhook_token: str = ""   # unguessable token embedded in the support-console webhook URL
     test_phone_allowlist: str = ""  # comma-separated E.164 numbers allowed to run TESTPAY (₹10 real gateway test); empty = disabled
     test_payment_minor: int = 1000  # ₹10
-    sender_mode: str = "dry_run"  # dry_run | live (live is refused until contract verified)
+    sender_mode: str = "dry_run"  # dry_run | live_test (replies only to TEST_PHONE_ALLOWLIST) | live
+    # BiteSpeed support console = Chatwoot. Replies go out through its documented API
+    # (POST /api/v1/accounts/{id}/conversations/{id}/messages, header api_access_token = an agent's profile access token).
+    chatwoot_base_url: str = "https://chat.bitespeed.co"
+    chatwoot_account_id: int = 3122
+    chatwoot_api_token: str = ""    # Profile settings -> Access Token of the agent the bot replies as (secret; Render env only)
 
     promo_window_start: str = "09:00"
     promo_window_end: str = "20:00"
