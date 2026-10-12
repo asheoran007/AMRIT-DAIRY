@@ -5,6 +5,7 @@ Expose publicly only behind TLS (reverse proxy / tunnel) — see RUNBOOK.md.
 """
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
@@ -14,6 +15,8 @@ from .config import settings
 from .db import make_engine, migrate, tx
 from .envelope import persist_event
 from .webhooks import verify as v
+
+log = logging.getLogger("amrit.api")
 
 engine = make_engine(settings.adapter_database_url)
 migrate(engine)
@@ -178,8 +181,18 @@ def shopify_auth_callback(request: Request) -> Response:
     with tx(engine) as conn:
         so.store_token(conn, shop, body["access_token"], body.get("scope"))
     settings.load_stored_token(engine)
+    # Register this app's webhook subscriptions right away (idempotent) so no shell step is needed after install.
+    base = settings.adapter_public_url.rstrip("/") or _public_base(request)
+    try:
+        from .tools.register_shopify_webhooks import ensure_subscriptions
+        wh = ensure_subscriptions(shop, body["access_token"], base)
+        wh_line = (f"webhooks -> {base}/webhooks/shopify: {len(wh['existing'])} existing, {len(wh['created'])} created"
+                   + (f", errors: {wh['errors']}" if wh["errors"] else ""))
+    except Exception as exc:
+        wh_line = f"webhook registration deferred ({type(exc).__name__}); run tools.register_shopify_webhooks"
+    log.info("shopify install ok shop=%s %s", shop, wh_line)
     return Response(status_code=200, media_type="text/plain",
-                    content=f"Amrit adapter installed on {shop}. scopes={body.get('scope')}. You can close this tab.")
+                    content=f"Amrit adapter installed on {shop}. scopes={body.get('scope')}.\n{wh_line}\nYou can close this tab.")
 
 
 @app.post("/webhooks/inbox/{token}")

@@ -35,6 +35,39 @@ DELETE = "mutation($id:ID!){ webhookSubscriptionDelete(id:$id){ deletedWebhookSu
 _auth = None
 
 
+def ensure_subscriptions(shop_domain: str, access_token: str, base_url: str) -> dict:
+    """Idempotently create this app's webhook subscriptions pointing at base_url (used by the OAuth callback right after
+    install, so the owner never has to run a shell). Returns {"existing": [...], "created": [...], "errors": [...]}."""
+    url = f"https://{shop_domain}/admin/api/2026-10/graphql.json"
+    hdr = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+
+    def call(q: str, v: dict | None = None) -> dict:
+        r = httpx.post(url, headers=hdr, json={"query": q, "variables": v or {}}, timeout=30)
+        r.raise_for_status()
+        body = r.json()
+        if body.get("errors"):
+            raise RuntimeError(json.dumps(body["errors"])[:300])
+        return body["data"]
+
+    base = base_url.rstrip("/")
+    existing = call(LIST)["webhookSubscriptions"]["nodes"]
+    have = {(n["topic"], n["uri"]) for n in existing}
+    out = {"existing": [(n["topic"], n["uri"]) for n in existing], "created": [], "errors": []}
+    for topic, path in TOPICS.items():
+        uri = base + path
+        if (topic, uri) in have:
+            continue
+        try:
+            res = call(CREATE, {"topic": topic, "sub": {"uri": uri, "format": "JSON"}})["webhookSubscriptionCreate"]
+            if res["userErrors"]:
+                out["errors"].append((topic, res["userErrors"]))
+            else:
+                out["created"].append((topic, uri))
+        except Exception as exc:  # keep going; the CLI can retry
+            out["errors"].append((topic, f"{type(exc).__name__}: {exc}"[:200]))
+    return out
+
+
 def gql(query: str, variables: dict | None = None) -> dict:
     global _auth
     if _auth is None:

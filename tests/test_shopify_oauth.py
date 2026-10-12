@@ -38,12 +38,28 @@ def test_full_install_flow_stores_offline_token_and_provider_uses_it(monkeypatch
     r = c.get("/shopify/auth/start?token=t0k", follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"].startswith("https://kmaz1y-dq.myshopify.com/admin/oauth/authorize?client_id=cid&scope=read_orders")
     state = r.headers["location"].split("state=")[1]
-    monkeypatch.setattr(so.httpx, "post", lambda url, json=None, timeout=None: type("R", (), {"status_code": 200, "json": lambda self: {"access_token": "shpat_offline", "scope": so.SCOPES}})())
+    # the callback also registers this app's webhook subscriptions (idempotent) with the fresh token
+    from amrit_adapter.tools import register_shopify_webhooks as rw
+    seen = []
+    def fake_post(url, headers=None, json=None, timeout=None):   # httpx is one module: this fake serves both callers
+        if url.endswith("/admin/oauth/access_token"):
+            return type("R", (), {"status_code": 200, "json": lambda self: {"access_token": "shpat_offline", "scope": so.SCOPES}})()
+        assert headers["X-Shopify-Access-Token"] == "shpat_offline"
+        q = json["query"]
+        if q.startswith("query"):
+            data = {"webhookSubscriptions": {"nodes": [{"id": "gid://shopify/WebhookSubscription/1", "topic": "ORDERS_PAID",
+                                                        "uri": "https://adapter.amritdairy.in/webhooks/shopify"}]}}
+        else:
+            seen.append(json["variables"]["topic"])
+            data = {"webhookSubscriptionCreate": {"webhookSubscription": {"id": "gid://shopify/WebhookSubscription/9", "topic": json["variables"]["topic"]}, "userErrors": []}}
+        return type("R", (), {"status_code": 200, "raise_for_status": lambda self: None, "json": lambda self: {"data": data}})()
+    monkeypatch.setattr(rw.httpx, "post", fake_post)
     p = {"code": "c0de", "shop": "kmaz1y-dq.myshopify.com", "state": state, "timestamp": str(int(time.time()))}
     bad = dict(p, hmac=_sign(p, "wrong")); assert c.get("/shopify/auth/callback", params=bad).status_code == 401
     p["hmac"] = _sign(p, "cs")
     r = c.get("/shopify/auth/callback", params=p)
     assert r.status_code == 200 and "installed" in r.text
+    assert "1 existing, 6 created" in r.text and sorted(seen) == sorted(t for t in rw.TOPICS if t != "ORDERS_PAID")
     assert settings._stored_token == "shpat_offline" and settings.shopify_auth_mode == "offline_token"
     assert settings.shopify_token_provider().token() == "shpat_offline"       # no client-credentials call needed
     assert c.get("/health").json()["shopify"] == "offline_token"
