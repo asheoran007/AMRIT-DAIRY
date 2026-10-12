@@ -38,6 +38,8 @@ _auth = None
 def gql(query: str, variables: dict | None = None) -> dict:
     global _auth
     if _auth is None:
+        from ..db import make_engine, migrate
+        eng = make_engine(settings.adapter_database_url); migrate(eng); settings.load_stored_token(eng)
         _auth = settings.shopify_token_provider()
     url = f"https://{settings.shopify_shop_domain}/admin/api/2026-10/graphql.json"
     r = httpx.post(url, headers={"X-Shopify-Access-Token": _auth.token(), "Content-Type": "application/json"},

@@ -20,9 +20,27 @@ class Settings(BaseSettings):
     shopify_client_id: str = ""     # Dev Dashboard app (same Shopify organization as the store): client credentials grant, 24 h tokens auto-renewed
     shopify_client_secret: str = ""  # also the webhook HMAC secret for subscriptions created by this app (used when SHOPIFY_WEBHOOK_SECRET is blank)
 
+    adapter_public_url: str = ""    # https://adapter.amritdairy.in — used for the OAuth redirect URI
+    _stored_token: str | None = None   # offline token obtained via /shopify/auth (authorization-code grant), loaded from DB
+
     @property
     def shopify_configured(self) -> bool:
-        return bool(self.shopify_shop_domain and (self.shopify_admin_token or (self.shopify_client_id and self.shopify_client_secret)))
+        return bool(self.shopify_shop_domain and (self.shopify_admin_token or self._stored_token or (self.shopify_client_id and self.shopify_client_secret)))
+
+    def load_stored_token(self, engine) -> str | None:
+        """Pick up an offline token stored by the OAuth callback (DB), if any; wins over client-credentials."""
+        from .engine.shopify_oauth import load_token
+        with engine.begin() as conn:
+            self._stored_token = load_token(conn, self.shopify_shop_domain) if self.shopify_shop_domain else None
+        return self._stored_token
+
+    @property
+    def shopify_auth_mode(self) -> str:
+        if not self.shopify_configured:
+            return "not_configured"
+        if self.shopify_admin_token or self._stored_token:
+            return "offline_token"
+        return "client_credentials"
 
     @property
     def effective_shopify_webhook_secret(self) -> str:
@@ -30,7 +48,8 @@ class Settings(BaseSettings):
 
     def shopify_token_provider(self):
         from .engine.shopify_auth import TokenProvider
-        return TokenProvider(self.shopify_shop_domain, static_token=self.shopify_admin_token, client_id=self.shopify_client_id, client_secret=self.shopify_client_secret)
+        return TokenProvider(self.shopify_shop_domain, static_token=self.shopify_admin_token or self._stored_token or "",
+                             client_id=self.shopify_client_id, client_secret=self.shopify_client_secret)
 
     razorpay_webhook_secret: str = ""
     razorpay_key_id: str = ""

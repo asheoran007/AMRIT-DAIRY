@@ -17,6 +17,7 @@ from .webhooks import verify as v
 
 engine = make_engine(settings.adapter_database_url)
 migrate(engine)
+settings.load_stored_token(engine)
 
 
 @asynccontextmanager
@@ -40,7 +41,7 @@ def health() -> dict:
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker,
-            "shopify": ("client_credentials" if settings.shopify_client_id else "static") if settings.shopify_configured else "not_configured"}
+            "shopify": settings.shopify_auth_mode}
 
 
 @app.post("/webhooks/shopify")
@@ -98,6 +99,44 @@ async def bot_turn(token: str, request: Request) -> Response:
                                       "reply_text": render_plain(r.messages),            # for a single Text node: {{bot_reply}}
                                       "labels": [x.split(":", 1)[1] for x in r.actions if x.startswith("label:")],
                                       "handoff": r.handoff, "handoff_team": r.handoff_team}, ensure_ascii=False))
+
+
+@app.get("/shopify/auth/start")
+def shopify_auth_start(token: str = "") -> Response:
+    """Owner-only: begins the authorization-code grant (custom distribution). Protected by the inbox token."""
+    import hmac as _h
+    from fastapi.responses import RedirectResponse
+    from .engine import shopify_oauth as so
+    if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
+        return Response(status_code=401, content="bad token")
+    if not (settings.shopify_client_id and settings.shopify_shop_domain and settings.adapter_public_url):
+        return Response(status_code=500, content="SHOPIFY_CLIENT_ID / SHOPIFY_SHOP_DOMAIN / ADAPTER_PUBLIC_URL not configured")
+    state = so.make_state(settings.inbox_webhook_token, settings.shopify_shop_domain)
+    return RedirectResponse(so.authorize_url(settings.shopify_shop_domain, settings.shopify_client_id,
+                                             settings.adapter_public_url.rstrip("/") + "/shopify/auth/callback", state), status_code=302)
+
+
+@app.get("/shopify/auth/callback")
+def shopify_auth_callback(request: Request) -> Response:
+    """Shopify redirects here after the owner approves the scopes. Verifies hmac + state, exchanges the code, stores the offline token."""
+    from .engine import shopify_oauth as so
+    params = {k: v for k, v in request.query_params.items()}
+    shop = params.get("shop", "")
+    if shop != settings.shopify_shop_domain:
+        return Response(status_code=400, content="unexpected shop")
+    if not so.verify_callback_hmac(params, settings.shopify_client_secret):
+        return Response(status_code=401, content="bad hmac")
+    if not so.check_state(settings.inbox_webhook_token, shop, params.get("state", "")):
+        return Response(status_code=401, content="bad state")
+    try:
+        body = so.exchange_code(shop, settings.shopify_client_id, settings.shopify_client_secret, params.get("code", ""))
+    except Exception as exc:
+        return Response(status_code=502, content=f"token exchange failed: {type(exc).__name__}")
+    with tx(engine) as conn:
+        so.store_token(conn, shop, body["access_token"], body.get("scope"))
+    settings.load_stored_token(engine)
+    return Response(status_code=200, media_type="text/plain",
+                    content=f"Amrit adapter installed on {shop}. scopes={body.get('scope')}. You can close this tab.")
 
 
 @app.post("/webhooks/inbox/{token}")

@@ -96,6 +96,7 @@ def main() -> None:
     setup_logging()
     engine = make_engine(settings.adapter_database_url)
     migrate(engine)
+    settings.load_stored_token(engine)
     if args.loop and not args.once:
         run_forever(engine, args.loop)
         return

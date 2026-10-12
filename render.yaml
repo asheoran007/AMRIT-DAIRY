@@ -24,6 +24,8 @@ services:
         value: amrit_dairy
       - key: SHOPIFY_SHOP_DOMAIN
         value: kmaz1y-dq.myshopify.com
+      - key: ADAPTER_PUBLIC_URL
+        value: https://adapter.amritdairy.in
       - key: SENDER_MODE
         value: dry_run
       - key: GLOBAL_KILL_SWITCH
