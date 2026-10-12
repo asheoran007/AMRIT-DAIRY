@@ -72,8 +72,37 @@ def process_inbox(engine, limit: int = 200, shopify_client=None) -> int:
     return n
 
 
+webhook_status: dict = {"checked_at": None, "subscribed": None, "created": None, "errors": None}
+_next_webhook_check = 0.0
+
+
+def ensure_shopify_webhooks(force: bool = False) -> dict | None:
+    """Self-healing: every 30 min (and after install) make sure this app's 7 webhook subscriptions exist on the store.
+    Only runs with an offline token (install done) and a public URL; result is exposed on /health as shopify_webhooks."""
+    global _next_webhook_check
+    if not force and time.time() < _next_webhook_check:
+        return None
+    _next_webhook_check = time.time() + 1800
+    tok = settings.shopify_admin_token or settings._stored_token
+    if not (tok and settings.shopify_shop_domain and settings.adapter_public_url):
+        return None
+    from .tools.register_shopify_webhooks import TOPICS, ensure_subscriptions
+    try:
+        res = ensure_subscriptions(settings.shopify_shop_domain, tok, settings.adapter_public_url)
+        base = settings.adapter_public_url.rstrip("/")
+        have = {t for t, u in res["existing"]} | {t for t, u in res["created"]}
+        webhook_status.update(checked_at=now_iso(), subscribed=len(have & set(TOPICS)), created=len(res["created"]), errors=res["errors"] or None)
+        log.info("shopify webhooks: subscribed=%s/%s created=%s errors=%s -> %s/webhooks/shopify", len(have & set(TOPICS)), len(TOPICS),
+                 len(res["created"]), res["errors"], base)
+    except Exception as exc:
+        webhook_status.update(checked_at=now_iso(), errors=[f"{type(exc).__name__}: {exc}"[:200]])
+        log.warning("shopify webhook check failed: %s", type(exc).__name__)
+    return webhook_status
+
+
 def one_pass(engine, sender, policy, shopify_client) -> None:
     process_inbox(engine, shopify_client=shopify_client)
+    ensure_shopify_webhooks()
     with tx(engine) as conn:
         for r in outbox.run_due(conn, sender, policy):
             log.info("outbox %s", r)

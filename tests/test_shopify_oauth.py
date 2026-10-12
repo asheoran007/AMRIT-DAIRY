@@ -59,7 +59,8 @@ def test_full_install_flow_stores_offline_token_and_provider_uses_it(monkeypatch
     p["hmac"] = _sign(p, "cs")
     r = c.get("/shopify/auth/callback", params=p)
     assert r.status_code == 200 and "installed" in r.text
-    assert "1 existing, 6 created" in r.text and sorted(seen) == sorted(t for t in rw.TOPICS if t != "ORDERS_PAID")
+    assert "7/7 subscribed (6 created now)" in r.text and sorted(seen) == sorted(t for t in rw.TOPICS if t != "ORDERS_PAID")
+    assert c.get("/health").json()["shopify_webhooks"]["subscribed"] == 7
     assert settings._stored_token == "shpat_offline" and settings.shopify_auth_mode == "offline_token"
     assert settings.shopify_token_provider().token() == "shpat_offline"       # no client-credentials call needed
     assert c.get("/health").json()["shopify"] == "offline_token"

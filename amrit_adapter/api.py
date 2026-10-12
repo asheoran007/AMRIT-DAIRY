@@ -44,7 +44,12 @@ def health() -> dict:
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
-            "shopify": settings.shopify_auth_mode}
+            "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status}
+
+
+def _worker_mod():
+    from . import worker as _w
+    return _w
 
 
 @app.post("/webhooks/shopify")
@@ -96,7 +101,7 @@ def _chatwoot():
     return ChatwootClient(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)
 
 
-@app.post("/bot/turn/{token}")
+@app.post("/bot/turn/{token:path}")
 async def bot_turn(token: str, request: Request) -> Response:
     """Called by a BiteSpeed flow 'API Call' node: {phone, text?, button_id?, name?} -> {state, messages[], actions[], handoff}.
     The flow renders messages[] (text/buttons/list/video) with its own Send/Quick-Reply/List nodes."""
@@ -196,21 +201,17 @@ def shopify_auth_callback(request: Request) -> Response:
     with tx(engine) as conn:
         so.store_token(conn, shop, body["access_token"], body.get("scope"))
     settings.load_stored_token(engine)
-    # Register this app's webhook subscriptions right away (idempotent) so no shell step is needed after install.
-    base = settings.adapter_public_url.rstrip("/") or _public_base(request)
-    try:
-        from .tools.register_shopify_webhooks import ensure_subscriptions
-        wh = ensure_subscriptions(shop, body["access_token"], base)
-        wh_line = (f"webhooks -> {base}/webhooks/shopify: {len(wh['existing'])} existing, {len(wh['created'])} created"
-                   + (f", errors: {wh['errors']}" if wh["errors"] else ""))
-    except Exception as exc:
-        wh_line = f"webhook registration deferred ({type(exc).__name__}); run tools.register_shopify_webhooks"
+    # Register this app's webhook subscriptions right away (idempotent, self-healing every 30 min in the worker too).
+    st = _worker_mod().ensure_shopify_webhooks(force=True) or {}
+    base = settings.adapter_public_url.rstrip("/")
+    wh_line = (f"webhooks -> {base}/webhooks/shopify: {st.get('subscribed')}/7 subscribed ({st.get('created')} created now)"
+               + (f", errors: {st['errors']}" if st.get("errors") else ""))
     log.info("shopify install ok shop=%s %s", shop, wh_line)
     return Response(status_code=200, media_type="text/plain",
                     content=f"Amrit adapter installed on {shop}. scopes={body.get('scope')}.\n{wh_line}\nYou can close this tab.")
 
 
-@app.post("/webhooks/inbox/{token}")
+@app.post("/webhooks/inbox/{token:path}")   # Render-generated tokens may contain "/" and "="
 async def inbox_webhook(token: str, request: Request) -> Response:
     """BiteSpeed support console (account 3122) -> Settings -> Integrations -> Webhooks.
     URL to register: https://<host>/webhooks/inbox/<INBOX_WEBHOOK_TOKEN>. Hint-level auth only."""

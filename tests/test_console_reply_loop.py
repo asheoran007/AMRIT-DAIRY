@@ -2,6 +2,7 @@
 Covers: event filtering, human-owned conversations, kill switch, SENDER_MODE dry_run / live_test (allowlist) / live,
 failure handling, dedupe on webhook redelivery, and the outbox ChatwootSender + GuardedSender."""
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,10 +82,11 @@ def test_webhook_endpoint_runs_loop_and_dedupes_redelivery(monkeypatch):
     sent = []
     monkeypatch.setattr(cv.ChatwootClient, "send_text", lambda self, cid, content, private=False: sent.append((cid, content, private)) or {"id": 1})
     c = TestClient(api.app)
+    mid = int(time.time() * 1000) % 10**9          # the API module's DB persists across tests: unique message id per run
     assert c.post("/webhooks/inbox/wrong", json=inbound()).status_code == 401
-    r = c.post("/webhooks/inbox/t0k", json=inbound(mid=900))
+    r = c.post("/webhooks/inbox/t0k", json=inbound(mid=mid))
     assert r.status_code == 200 and r.json()["status"] == "sent" and sent and sent[0][0] == 777
-    assert c.post("/webhooks/inbox/t0k", json=inbound(mid=900)).text == "duplicate" and len(sent) == 1   # redelivery is a no-op
+    assert c.post("/webhooks/inbox/t0k", json=inbound(mid=mid)).text == "duplicate" and len(sent) == 1   # redelivery is a no-op
     assert c.get("/health").json()["console_api"] is True
 
 
@@ -114,3 +116,14 @@ def test_outbox_chatwoot_sender_and_guard(monkeypatch):
     assert g.send("k2", {"phone": "+919999999999", "message": "x"}).outcome == "dry_run"
     assert g.send("k3", {"phone": PHONE, "message": "x"}).outcome == "sent"
     assert GuardedSender(s, "dry_run", (PHONE,)).send("k4", {"phone": PHONE, "message": "x"}).outcome == "dry_run"
+
+
+def test_inbox_token_with_slash_and_equals_is_accepted(monkeypatch):
+    """Render's generateValue produced a base64 token containing '/' and '=': the path must capture it whole."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "abc/def="); monkeypatch.setattr(settings, "sender_mode", "dry_run")
+    c = TestClient(api.app)
+    assert c.post("/webhooks/inbox/abc/def=", json=inbound(event="conversation_created", mid=int(time.time()) % 10**9)).status_code == 200
+    assert c.post("/webhooks/inbox/abc", json=inbound(event="conversation_created")).status_code == 401
+    assert c.post("/bot/turn/abc/def=", json={"phone": PHONE, "text": "hi"}).status_code == 200
