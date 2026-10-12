@@ -54,6 +54,14 @@ def verify_callback_hmac(params: dict[str, str], client_secret: str) -> bool:
     return bool(given) and hmac.compare_digest(calc, given)
 
 
+def fresh_timestamp(ts: str, max_age_s: int = 900) -> bool:
+    """Shopify-signed app-URL loads carry a unix `timestamp`; reject stale/replayed ones."""
+    try:
+        return abs(time.time() - int(ts)) <= max_age_s
+    except ValueError:
+        return False
+
+
 def exchange_code(shop_domain: str, client_id: str, client_secret: str, code: str) -> dict:
     r = httpx.post(f"https://{shop_domain}/admin/oauth/access_token",
                    json={"client_id": client_id, "client_secret": client_secret, "code": code}, timeout=20)

@@ -59,3 +59,23 @@ def test_start_uses_render_host_before_custom_domain_dns(monkeypatch):
     assert "redirect_uri=https%3A%2F%2Famrit-adapter.onrender.com%2Fshopify%2Fauth%2Fcallback" in r.headers["location"]
     r = c.get("/shopify/auth/start?token=t0k", headers={"host": "evil.example"}, follow_redirects=False)
     assert "redirect_uri=https%3A%2F%2Fadapter.amritdairy.in%2Fshopify%2Fauth%2Fcallback" in r.headers["location"]
+
+
+def test_start_accepts_shopify_signed_app_url_load_but_not_forgeries(monkeypatch):
+    """Shopify opens the App URL with ?shop&hmac&timestamp&host signed with the client secret: that starts OAuth too."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "shopify_shop_domain", "kmaz1y-dq.myshopify.com")
+    monkeypatch.setattr(settings, "shopify_client_id", "cid"); monkeypatch.setattr(settings, "shopify_client_secret", "cs")
+    monkeypatch.setattr(settings, "adapter_public_url", "https://adapter.amritdairy.in")
+    c = TestClient(api.app)
+    p = {"shop": "kmaz1y-dq.myshopify.com", "timestamp": str(int(time.time())), "host": "YWRtaW4"}
+    good = dict(p, hmac=_sign(p, "cs"))
+    r = c.get("/shopify/auth/start", params=good, follow_redirects=False)
+    assert r.status_code == 302 and "/admin/oauth/authorize?" in r.headers["location"]
+    assert c.get("/shopify/auth/start", params=dict(good, hmac="0" * 64), follow_redirects=False).status_code == 401   # bad signature
+    other = dict(p, shop="other.myshopify.com"); other["hmac"] = _sign(other, "cs")
+    assert c.get("/shopify/auth/start", params=other, follow_redirects=False).status_code == 401                        # wrong shop
+    stale = dict(p, timestamp=str(int(time.time()) - 3600)); stale["hmac"] = _sign(stale, "cs")
+    assert c.get("/shopify/auth/start", params=stale, follow_redirects=False).status_code == 401                        # replay
+    assert c.get("/shopify/auth/start", follow_redirects=False).status_code == 401                                      # nothing

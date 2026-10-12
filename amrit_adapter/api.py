@@ -113,11 +113,19 @@ def _public_base(request: Request) -> str:
 
 @app.get("/shopify/auth/start")
 def shopify_auth_start(request: Request, token: str = "") -> Response:
-    """Owner-only: begins the authorization-code grant (custom distribution). Protected by the inbox token."""
+    """Begins the authorization-code grant (custom distribution). Two accepted entries:
+    (a) owner link  ?token=<INBOX_WEBHOOK_TOKEN>;
+    (b) Shopify app-URL load: Shopify opens the configured App URL with ?shop&hmac&timestamp(&host) signed with the
+        client secret (same scheme as the OAuth callback) - the documented install entry point, no shared secret in any link."""
     import hmac as _h
     from fastapi.responses import RedirectResponse
     from .engine import shopify_oauth as so
-    if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
+    params = {k: v for k, v in request.query_params.items()}
+    owner_ok = bool(settings.inbox_webhook_token) and bool(token) and _h.compare_digest(token, settings.inbox_webhook_token)
+    shopify_ok = (params.get("shop") == settings.shopify_shop_domain and bool(settings.shopify_client_secret)
+                  and so.verify_callback_hmac({k: v for k, v in params.items() if k != "token"}, settings.shopify_client_secret)
+                  and so.fresh_timestamp(params.get("timestamp", "")))
+    if not (owner_ok or shopify_ok):
         return Response(status_code=401, content="bad token")
     base = _public_base(request)
     if not (settings.shopify_client_id and settings.shopify_shop_domain and base):
