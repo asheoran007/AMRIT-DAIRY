@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     adapter_brand_id: str = "amrit_dairy"
     adapter_database_url: str = "sqlite:///./adapter.db"
+    release: str = ""   # RELEASE env (render.yaml); shown on /health so a deploy can be verified from outside
     adapter_embed_worker: bool = False   # true = run the worker loop inside the API process (single-service hosts such as Render + one disk)
     adapter_worker_interval_s: int = 20
 

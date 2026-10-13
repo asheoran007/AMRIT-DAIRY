@@ -42,7 +42,7 @@ def health() -> dict:
     with tx(engine) as conn:
         queued = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status='queued'")).scalar()
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
-    return {"ok": True, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
+    return {"ok": True, "release": settings.release, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
             "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status,
             "backup": _backup_status()}
