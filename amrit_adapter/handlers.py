@@ -127,6 +127,44 @@ def handle(conn: Connection, ev: InternalEvent, first_delay_min: int = 45, shopi
                                conn.execute(text("SELECT contact_id FROM order_ref WHERE order_key=:k"), {"k": key}).fetchone()[0], key)
         return actions
 
+    if ev.event_type == "shopify.orders.cancelled":
+        if ev.auth_level != "verified_signature":
+            return ["ignored: unverified shopify event"]
+        key = upsert_order_from_shopify(conn, b, p, "order")
+        conn.execute(text("UPDATE order_ref SET fulfilment_state='cancelled', updated_at=:u WHERE order_key=:k"), {"u": now_iso(), "k": key})
+        n = outbox.cancel_where(conn, "order cancelled", order_key=key)
+        actions.append(f"order {p.get('name')} cancelled; {n} queued jobs cancelled")
+        # Shiprocket may already have imported it: a human must confirm it is cancelled there too (no Shiprocket write API here)
+        outbox.enqueue(conn, b, f"{key}:cancelled:verify_shiprocket", "internal_task", "internal",
+                       {"purpose": "verify_shiprocket_cancelled", "order": p.get("name")}, now_iso(), None, key)
+        actions.append("internal task: verify Shiprocket cancellation")
+        return actions
+
+    if ev.event_type in ("shopify.fulfillments.create", "shopify.fulfillments.update"):
+        if ev.auth_level != "verified_signature":
+            return ["ignored: unverified shopify event"]
+        order_key = f"{b}:shopify:order:{p.get('order_id')}"
+        row = conn.execute(text("SELECT fulfilment_state FROM order_ref WHERE order_key=:k"), {"k": order_key}).fetchone()
+        if not row:
+            return [f"fulfillment for unknown order {p.get('order_id')} ignored"]
+        status = (p.get("status") or "").lower()                      # pending|open|success|cancelled|error|failure
+        ship = (p.get("shipment_status") or "").lower()               # label_printed|confirmed|in_transit|out_for_delivery|delivered|failure|...
+        new_state = {"delivered": "delivered", "out_for_delivery": "out_for_delivery", "in_transit": "in_transit",
+                     "confirmed": "awb_created", "label_printed": "awb_created", "label_purchased": "awb_created",
+                     "attempted_delivery": "ndr", "failure": "ndr"}.get(ship) or ("awb_created" if status == "success" and not ship else None)
+        if status == "cancelled":
+            new_state = "unfulfilled"
+        if new_state and row[0] != "cancelled":
+            conn.execute(text("UPDATE order_ref SET fulfilment_state=:f, updated_at=:u WHERE order_key=:k"), {"f": new_state, "u": now_iso(), "k": order_key})
+            actions.append(f"fulfilment {p.get('order_id')}: {row[0]} -> {new_state} (shopify {status}/{ship or '-'})")
+        else:
+            actions.append(f"fulfilment event {status}/{ship or '-'} recorded; state unchanged ({row[0]})")
+        if row[0] == "cancelled" and status not in ("cancelled",):
+            outbox.enqueue(conn, b, f"{order_key}:ship_after_cancel", "internal_task", "internal",
+                           {"purpose": "fulfillment_on_cancelled_order", "order_id": p.get("order_id"), "tracking": p.get("tracking_number")}, now_iso(), None, order_key)
+            actions.append("ALERT: fulfillment created on a cancelled order -> internal task")
+        return actions
+
     if ev.event_type.startswith("razorpay.payment_link."):
         if ev.auth_level != "verified_signature":
             return ["ignored: unverified razorpay event"]

@@ -67,8 +67,11 @@ def _norm_phone(p: str) -> str:
 
 
 def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: ChatwootClient | None, sender_mode: str,
-                   allowlist: tuple[str, ...], kill_switch: bool) -> ReplyOutcome:
-    """Run one engine turn for an inbound console message and deliver the answer under the guards above."""
+                   allowlist: tuple[str, ...], kill_switch: bool, yield_keywords: tuple[str, ...] = ()) -> ReplyOutcome:
+    """Run one engine turn for an inbound console message and deliver the answer under the guards above.
+    yield_keywords: while BiteSpeed keyword flows (AD-01 ghee / AD-02 honey / AD-08 milk) are still active, messages that
+    contain one of their trigger words are left to that flow so the customer never gets two answers (FLOW_KEYWORDS_YIELD).
+    Allowlisted test numbers are exempt so the engine journey can be tested end to end before the flows are retired."""
     if body.get("event") != "message_created":
         return ReplyOutcome("skipped", f"event {body.get('event')}")
     if body.get("message_type") not in ("incoming", 0):
@@ -85,6 +88,11 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
         return ReplyOutcome("skipped", "conversation owned by a human agent")
     text_in = str(body.get("content") or "").strip()
     name = (body.get("sender") or {}).get("name")
+    low = text_in.lower()
+    hit = next((k for k in yield_keywords if k and k.lower() in low), None)
+    if hit and _norm_phone(phone) not in {_norm_phone(a) for a in allowlist}:
+        audit(conn, "bot", "bot.yield", str(conv_id), {"phone_last4": phone[-4:], "keyword": hit})
+        return ReplyOutcome("skipped", f"left to BiteSpeed keyword flow ('{hit}')")
 
     eng = build_engine()
     r = eng.turn(conn, phone, text_in, None, name)

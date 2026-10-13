@@ -44,7 +44,13 @@ def health() -> dict:
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
-            "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status}
+            "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status,
+            "backup": _backup_status()}
+
+
+def _backup_status() -> dict:
+    from . import backup as _b
+    return _b.status
 
 
 def _worker_mod():
@@ -230,7 +236,8 @@ async def inbox_webhook(token: str, request: Request) -> Response:
         if ev.event_type == "bitespeed_inbox.message_created":
             try:
                 out = handle_inbound(conn, ev.payload, build_engine, _chatwoot(), settings.sender_mode, _allowlist(),
-                                     settings.global_kill_switch)
+                                     settings.global_kill_switch,
+                                     tuple(k.strip() for k in settings.flow_keywords_yield.split(",") if k.strip()))
             except Exception:
                 log.exception("inbound message handling failed (event stays persisted)")
                 return Response(status_code=200, content="error-logged")

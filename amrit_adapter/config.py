@@ -68,7 +68,8 @@ class Settings(BaseSettings):
     # (POST /api/v1/accounts/{id}/conversations/{id}/messages, header api_access_token = an agent's profile access token).
     chatwoot_base_url: str = "https://chat.bitespeed.co"
     chatwoot_account_id: int = 3122
-    chatwoot_api_token: str = ""    # Profile settings -> Access Token of the agent the bot replies as (secret; Render env only)
+    flow_keywords_yield: str = ""   # comma-separated BiteSpeed keyword triggers still active (AD-01/02/08); engine stays silent on them
+    chatwoot_api_token: str = ""    # access token of the agent the bot replies as (owner: GET /api/v1/profile while logged in); Render env only
 
     promo_window_start: str = "09:00"
     promo_window_end: str = "20:00"
@@ -82,6 +83,8 @@ class Settings(BaseSettings):
 
     cod_zones_geojson: str = "./config/cod_zones.geojson"
 
+    backup_interval_s: int = 86400   # daily SQLite backup into <db dir>/backups (persistent disk), see backup.py
+    backup_keep: int = 7
     alert_destination: str = ""
     reports_enabled: bool = False
 

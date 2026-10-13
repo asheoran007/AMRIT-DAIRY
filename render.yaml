@@ -32,6 +32,8 @@ services:
         value: dry_run            # dry_run | live_test (TEST_PHONE_ALLOWLIST only) | live
       - key: CHATWOOT_API_TOKEN   # support console (chat.bitespeed.co) -> Profile settings -> Access Token; set in dashboard
         sync: false
+      - key: FLOW_KEYWORDS_YIELD   # BiteSpeed keyword flows still active (AD-01/02/08): engine stays silent on these; clear at go-live
+        value: "ghee,घी,ghi,bilona,बिलोना,desi ghee,cow ghee,golden ghee,honey,shahad,शहद,milk,doodh,दूध"
       - key: GLOBAL_KILL_SWITCH
         value: "true"
       - key: TEST_PHONE_ALLOWLIST

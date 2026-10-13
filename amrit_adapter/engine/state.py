@@ -76,8 +76,18 @@ class Engine:
         self.price_ttl_s = 600   # pack-list prices re-read from Shopify at most every 10 min; the final quote is always live
 
     # ---------------- public ----------------
+    RETRY_MSG = "थोड़ी तकनीकी दिक्कत आई 🙏 कृपया 1 मिनट बाद फिर से लिखें — आपकी पसंद याद रखी गई है।"
+
     def turn(self, conn: Connection, phone: str, text_in: str = "", button_id: str | None = None, display_name: str | None = None) -> TurnResult:
-        r = self._turn(conn, phone, text_in, button_id, display_name)
+        try:
+            r = self._turn(conn, phone, text_in, button_id, display_name)
+        except Exception as exc:
+            # Safe recovery after a provider/API failure (Shopify 5xx, timeout, bad payload): the session is left where it
+            # was, the customer gets a retry message, the error is audited (type only) and never surfaces as silence.
+            state = conn.execute(text("SELECT state FROM conversation_session WHERE brand_id=:b AND phone_e164=:p"),
+                                 {"b": self.brand, "p": phone}).scalar() or "NEW"
+            audit(conn, "engine", "turn.error", phone[-4:], {"state": state, "error": type(exc).__name__})
+            return TurnResult(state, [Msg("text", self.RETRY_MSG)], [f"error:{type(exc).__name__}"])
         opts = [i for m in r.messages for i, _ in m.buttons] + [i for m in r.messages for i, _, _ in m.rows]
         conn.execute(text("UPDATE conversation_session SET last_options_json=:o WHERE brand_id=:b AND phone_e164=:p"),
                      {"o": json.dumps(opts) if opts else None, "b": self.brand, "p": phone})
@@ -404,6 +414,27 @@ def quote_ref_from_order(order: dict[str, Any]) -> str | None:
 
 
 # ---------------- payment completion (called from the verified orders/paid webhook) ----------------
+MANUAL_GATEWAYS = {"manual", "", "bogus", "cash", "cash on delivery (cod)", "cod"}
+
+
+def gateways_of(order: dict[str, Any]) -> list[str]:
+    return [str(tr.get("gateway") or "") for tr in (order.get("transactions") or [])]
+
+
+def gateway_verified(order: dict[str, Any]) -> bool:
+    """True only when a SUCCESSful SALE/CAPTURE transaction came through a real payment gateway (e.g. Razorpay via
+    Shopify checkout). Manual 'mark as paid', COD and test-mode transactions never count as gateway verification."""
+    for tr in order.get("transactions") or []:
+        if (tr.get("status") or "").upper() != "SUCCESS" or (tr.get("kind") or "").upper() not in ("SALE", "CAPTURE"):
+            continue
+        if tr.get("test"):
+            continue
+        if (tr.get("gateway") or "").strip().lower() in MANUAL_GATEWAYS:
+            continue
+        return True
+    return False
+
+
 def on_order_paid(conn: Connection, shopify_order: dict[str, Any], shopify: ShopifyClient) -> dict[str, Any]:
     """Idempotent: links the Shopify order to the draft/session once; a replayed webhook returns 'duplicate'."""
     draft_gid = shopify_order.get("draft_order_id") or (shopify_order.get("draft_order") or {}).get("admin_graphql_api_id")
@@ -425,6 +456,10 @@ def on_order_paid(conn: Connection, shopify_order: dict[str, Any], shopify: Shop
     verified = shopify.get_order(shopify_order["id"]) or {}
     if (verified.get("displayFinancialStatus") or "").upper() != "PAID":
         return {"status": "not_paid", "financial": verified.get("displayFinancialStatus")}
+    if not gateway_verified(verified):
+        # "Mark as paid" in the admin yields gateway=manual: that is a bookkeeping entry, never a gateway capture.
+        audit(conn, "engine", "order.manual_paid_ignored", ref.session_id, {"order": verified.get("name"), "gateways": gateways_of(verified)})
+        return {"status": "manual_paid", "order_id": verified["id"], "gateways": gateways_of(verified)}
     s = dict(conn.execute(text("SELECT * FROM conversation_session WHERE session_id=:s"), {"s": ref.session_id}).fetchone()._mapping)
     q = json.loads(s["quote_json"] or "{}")
     amt = int(round(float(verified["currentTotalPriceSet"]["shopMoney"]["amount"]) * 100))
@@ -437,6 +472,10 @@ def on_order_paid(conn: Connection, shopify_order: dict[str, Any], shopify: Shop
     conn.execute(text("UPDATE draft_order_ref SET completed_order_id=:o, completed_at=:n WHERE draft_order_id=:d"),
                  {"o": verified["id"], "n": now_iso(), "d": draft_gid})
     s["shopify_order_id"] = verified["id"]; s["shopify_order_name"] = verified["name"]; s["state"] = "ORDERED"; _save(conn, s)
+    if (s.get("quote_ref") or "").startswith("AMQ-TEST-") and hasattr(shopify, "hold_fulfillment"):
+        # gateway test order (₹10 custom item): never to be shipped -> fulfillment hold so Shiprocket cannot book it
+        hold = shopify.hold_fulfillment(verified["id"], "ENGINE GATEWAY TEST - do not ship; cancel + refund after verification")
+        audit(conn, "engine", "test_order.hold", s["session_id"], {"order": verified["name"], **hold})
     if s.get("product_key"):
         leads.upsert_lead(conn, s["brand_id"], s["contact_id"], s["product_key"], "ordered")
     msg = Msg("text", f"✅ भुगतान मिल गया, धन्यवाद जी!\nआपका ऑर्डर *{verified['name']}* confirm हो गया — {_inr(amt)}\nDispatch होते ही tracking इसी WhatsApp पर आएगी।")

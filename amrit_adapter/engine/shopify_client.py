@@ -18,7 +18,7 @@ from typing import Any, Protocol
 import httpx
 
 CUSTOMER_BY_PHONE = """
-query($q:String!){ customers(first:3, query:$q){ nodes{ id displayName phone email numberOfOrders
+query($q:String!){ customers(first:10, query:$q){ nodes{ id displayName phone email numberOfOrders
   defaultAddress{ id name address1 address2 city province zip country phone }
   addresses(first:5){ id name address1 address2 city province zip country phone } } } }"""
 
@@ -34,12 +34,19 @@ mutation($input:DraftOrderInput!){ draftOrderCalculate(input:$input){ calculated
   lineItems{ quantity variant{ id availableForSale inventoryQuantity inventoryPolicy price } originalUnitPriceSet{ shopMoney{ amount } } }
   warnings{ message } alerts{ title } } userErrors{ field message } } }"""
 
+FULFILLMENT_ORDERS = """
+query($id:ID!){ order(id:$id){ id fulfillmentOrders(first:10){ nodes{ id status fulfillmentHolds{ reason } } } } }"""
+
+FULFILLMENT_ORDER_HOLD = """
+mutation($id:ID!,$hold:FulfillmentOrderHoldInput!){ fulfillmentOrderHold(id:$id, fulfillmentHold:$hold){ fulfillmentOrder{ id status } userErrors{ field message } } }"""
+
 VARIANTS_BY_ID = """
 query($ids:[ID!]!){ nodes(ids:$ids){ ... on ProductVariant{ id title price availableForSale inventoryQuantity inventoryPolicy product{ status } } } }"""
 
 ORDER_BY_ID = """
 query($id:ID!){ order(id:$id){ id name displayFinancialStatus displayFulfillmentStatus currentTotalPriceSet{ shopMoney{ amount currencyCode } }
-  customer{ id } lineItems(first:10){ nodes{ variant{ id } quantity } } } }"""
+  customer{ id } lineItems(first:10){ nodes{ variant{ id } quantity } }
+  transactions(first:10){ gateway kind status test } } }"""
 
 
 @dataclass
@@ -202,6 +209,29 @@ class LiveShopifyClient:
     def get_order(self, order_gid: str) -> dict[str, Any] | None:
         return self._gql(ORDER_BY_ID, {"id": order_gid}).get("order")
 
+    def hold_fulfillment(self, order_gid: str, reason_notes: str) -> dict[str, Any]:
+        """Put every OPEN fulfillment order of this order on hold (Shiprocket then cannot ship it). Needs the
+        read/write_merchant_managed_fulfillment_orders scopes (app version v5); without them the error is reported, not raised."""
+        try:
+            fos = (self._gql(FULFILLMENT_ORDERS, {"id": order_gid}).get("order") or {}).get("fulfillmentOrders", {}).get("nodes") or []
+        except Exception as exc:
+            return {"held": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
+        held, errors = [], []
+        for fo in fos:
+            if fo.get("status") not in ("OPEN", "IN_PROGRESS", "SCHEDULED"):
+                continue
+            if fo.get("fulfillmentHolds"):
+                held.append(fo["id"]); continue
+            try:
+                res = self._gql(FULFILLMENT_ORDER_HOLD, {"id": fo["id"], "hold": {"reason": "OTHER", "reasonNotes": reason_notes[:255], "notifyMerchant": True}})["fulfillmentOrderHold"]
+                if res["userErrors"]:
+                    errors.append(res["userErrors"])
+                else:
+                    held.append(fo["id"])
+            except Exception as exc:
+                errors.append(f"{type(exc).__name__}: {exc}"[:200])
+        return {"held": held, "error": errors or None}
+
     def calculate_quote(self, *, variant_id, quantity, address, customer_id, discount_minor=0, discount_title=None) -> QuoteCalc:
         inp: dict[str, Any] = {"lineItems": [{"variantId": variant_id, "quantity": quantity}],
                                "shippingAddress": address.to_shopify(), "useCustomerDefaultAddress": False}
@@ -299,14 +329,23 @@ class FakeShopifyClient:
         self.drafts[gid] = {"quote_ref": quote_ref, "variant_id": None, "quantity": 1, "total": amount_minor, "address": address, "discount": 0, "discount_title": None}
         return DraftOrder(gid, f"#D{self._n}", f"https://kmaz1y-dq.myshopify.com/invoices/test-{self._n}", amount_minor, "INR")
 
-    def complete_checkout(self, draft_gid: str, order_number: int) -> dict[str, Any]:
-        """Simulates the customer paying on the invoice: Shopify creates a real order."""
+    def complete_checkout(self, draft_gid: str, order_number: int, gateway: str = "01 Cards, UPI, NB, Wallets by Razorpay") -> dict[str, Any]:
+        """Simulates the customer paying on the invoice: Shopify creates a real order with a gateway SALE transaction.
+        gateway="manual" reproduces an admin 'Mark as paid' (what #1151 was) - the engine must NOT treat that as verified."""
         d = self.drafts[draft_gid]
         gid = f"gid://shopify/Order/{order_number}"
         self.orders[gid] = {"id": gid, "name": f"#{order_number}", "displayFinancialStatus": "PAID", "displayFulfillmentStatus": "UNFULFILLED",
                             "currentTotalPriceSet": {"shopMoney": {"amount": f"{d['total']/100:.2f}", "currencyCode": "INR"}},
-                            "lineItems": {"nodes": [{"variant": ({"id": d["variant_id"]} if d["variant_id"] else None), "quantity": d["quantity"]}]}, "draft_order_id": draft_gid}
+                            "lineItems": {"nodes": [{"variant": ({"id": d["variant_id"]} if d["variant_id"] else None), "quantity": d["quantity"]}]}, "draft_order_id": draft_gid,
+                            "transactions": [{"gateway": gateway, "kind": "SALE", "status": "SUCCESS", "test": False}]}
         return self.orders[gid]
 
     def get_order(self, order_gid):
         return self.orders.get(order_gid)
+
+    def hold_fulfillment(self, order_gid, reason_notes):
+        o = self.orders.get(order_gid)
+        if not o:
+            return {"held": [], "error": "no such order"}
+        o["fulfillment_hold"] = reason_notes
+        return {"held": [f"{order_gid}/fo1"], "error": None}

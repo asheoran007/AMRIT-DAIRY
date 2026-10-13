@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 import httpx
 from sqlalchemy import text
 
-SCOPES = "read_orders,read_customers,read_products,read_draft_orders,write_draft_orders,read_checkouts,read_fulfillments"
+SCOPES = "read_orders,read_customers,read_products,read_draft_orders,write_draft_orders,read_checkouts,read_fulfillments,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders"
 
 
 def make_state(secret: str, shop: str, ts: int | None = None) -> str:

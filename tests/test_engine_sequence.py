@@ -283,3 +283,53 @@ def test_testpay_is_allowlisted_small_amount_and_verified_like_any_order(engine,
         order = shop.complete_checkout(gid, 2200)
         res = on_order_paid(c, order, shop); assert res["status"] == "ordered" and "#2200" in res["message"]["text"]
         assert on_order_paid(c, order, shop)["status"] == "duplicate"
+        # the ₹10 test order is put on fulfillment hold immediately (Shiprocket must never book it); real orders are not
+        assert "do not ship" in order["fulfillment_hold"]
+        assert c.execute(text("SELECT COUNT(*) FROM audit_log WHERE action='test_order.hold'")).scalar() == 1
+        e.turn(c, PHONE, "ghee"); e.turn(c, PHONE, button_id="pack:1 L"); e.turn(c, PHONE, button_id="qty:1"); e.turn(c, PHONE, "haan")
+        r = e.turn(c, PHONE, button_id="confirm_yes"); draft = next(a for a in r.actions if a.startswith("draft:")).split(":", 1)[1]
+        real = shop.complete_checkout(draft, 2201)
+        assert on_order_paid(c, {"id": real["id"], "draft_order_id": draft}, shop)["status"] == "ordered" and "fulfillment_hold" not in real
+
+
+def test_09c_manual_mark_as_paid_is_never_gateway_verification(engine, eng):
+    """#1151 pattern: admin 'Mark as paid' -> financial PAID but gateway=manual. Engine must keep waiting (and audit it);
+    a later REAL gateway capture on the same order then confirms exactly once."""
+    e, shop = eng
+    with engine.begin() as c:
+        e.turn(c, PHONE, "ghee"); e.turn(c, PHONE, button_id="pack:1 L"); e.turn(c, PHONE, button_id="qty:1"); e.turn(c, PHONE, "haan")
+        r = e.turn(c, PHONE, button_id="confirm_yes")
+        draft = next(a for a in r.actions if a.startswith("draft:")).split(":", 1)[1]
+        order = shop.complete_checkout(draft, 2003, gateway="manual")
+        res = on_order_paid(c, {"id": order["id"], "draft_order_id": draft}, shop)
+        assert res["status"] == "manual_paid" and res["gateways"] == ["manual"]
+        assert c.execute(text("SELECT state FROM conversation_session WHERE phone_e164=:p"), {"p": PHONE}).scalar() == "AWAITING_PAYMENT"
+        assert c.execute(text("SELECT COUNT(*) FROM audit_log WHERE action='order.manual_paid_ignored'")).scalar() == 1
+        # pending / failed / test-mode transactions do not count either
+        for tr in ({"gateway": "01 Cards, UPI, NB, Wallets by Razorpay", "kind": "SALE", "status": "PENDING", "test": False},
+                   {"gateway": "01 Cards, UPI, NB, Wallets by Razorpay", "kind": "SALE", "status": "FAILURE", "test": False},
+                   {"gateway": "01 Cards, UPI, NB, Wallets by Razorpay", "kind": "SALE", "status": "SUCCESS", "test": True},
+                   {"gateway": "01 Cards, UPI, NB, Wallets by Razorpay", "kind": "AUTHORIZATION", "status": "SUCCESS", "test": False}):
+            order["transactions"] = [tr]
+            assert on_order_paid(c, {"id": order["id"], "draft_order_id": draft}, shop)["status"] == "manual_paid"
+        # the real capture arrives -> ordered, once
+        order["transactions"] = [{"gateway": "01 Cards, UPI, NB, Wallets by Razorpay", "kind": "SALE", "status": "SUCCESS", "test": False}]
+        assert on_order_paid(c, {"id": order["id"], "draft_order_id": draft}, shop)["status"] == "ordered"
+        assert on_order_paid(c, {"id": order["id"], "draft_order_id": draft}, shop)["status"] == "duplicate"
+
+
+def test_api_failure_is_recovered_with_retry_message_and_unchanged_state(engine, eng):
+    """Shopify down mid-journey: no crash, no silence, no state corruption; the next turn works again."""
+    e, shop = eng
+    with engine.begin() as c:
+        e.turn(c, PHONE, "ghee"); e.turn(c, PHONE, button_id="pack:5 L"); e.turn(c, PHONE, button_id="qty:1")
+        assert e.turn(c, PHONE, "haan").state == "QUOTE"
+        orig = shop.create_draft_order
+        shop.create_draft_order = lambda **kw: (_ for _ in ()).throw(RuntimeError("HTTP 503"))
+        r = e.turn(c, PHONE, button_id="confirm_yes")
+        assert r.state == "QUOTE" and "तकनीकी" in r.messages[0].text and "error:RuntimeError" in r.actions
+        assert c.execute(text("SELECT COUNT(*) FROM audit_log WHERE action='turn.error'")).scalar() == 1
+        assert len(shop.drafts) == 0
+        shop.create_draft_order = orig
+        r = e.turn(c, PHONE, button_id="confirm_yes")     # provider back: the journey continues from the same state
+        assert r.state == "AWAITING_PAYMENT" and len(shop.drafts) == 1

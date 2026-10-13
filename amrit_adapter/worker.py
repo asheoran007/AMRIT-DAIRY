@@ -13,7 +13,7 @@ import time
 
 from sqlalchemy import text
 
-from . import handlers, outbox, reports
+from . import backup, handlers, outbox, reports
 from .config import settings
 from .db import make_engine, migrate, now_iso, tx
 from .envelope import InternalEvent
@@ -103,6 +103,7 @@ def ensure_shopify_webhooks(force: bool = False) -> dict | None:
 def one_pass(engine, sender, policy, shopify_client) -> None:
     process_inbox(engine, shopify_client=shopify_client)
     ensure_shopify_webhooks()
+    backup.maybe_backup(settings.adapter_database_url, settings.backup_interval_s, settings.backup_keep)
     with tx(engine) as conn:
         for r in outbox.run_due(conn, sender, policy):
             log.info("outbox %s", r)

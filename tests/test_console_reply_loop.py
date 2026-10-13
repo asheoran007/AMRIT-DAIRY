@@ -127,3 +127,17 @@ def test_inbox_token_with_slash_and_equals_is_accepted(monkeypatch):
     assert c.post("/webhooks/inbox/abc/def=", json=inbound(event="conversation_created", mid=int(time.time()) % 10**9)).status_code == 200
     assert c.post("/webhooks/inbox/abc", json=inbound(event="conversation_created")).status_code == 401
     assert c.post("/bot/turn/abc/def=", json={"phone": PHONE, "text": "hi"}).status_code == 200
+
+
+def test_engine_yields_to_active_bitespeed_keyword_flows_except_for_test_numbers(engine, build):
+    """Transitional guard: while AD-01's 'ghee' keyword flow is live, customers get one answer (the flow's), not two."""
+    chat = FakeChat()
+    kws = ("ghee", "घी", "shahad")
+    with engine.begin() as c:
+        r = cv.handle_inbound(c, inbound("ghee price?", phone="+919999999999", mid=11), build, chat, "live", (PHONE,), False, kws)
+        assert r.status == "skipped" and "keyword flow" in r.reason and not chat.sent
+        r = cv.handle_inbound(c, inbound("namaste", phone="+919999999999", mid=12), build, chat, "live", (PHONE,), False, kws)
+        assert r.status == "sent" and len(chat.sent) == 1              # non-keyword message: engine answers
+        r = cv.handle_inbound(c, inbound("ghee", mid=13), build, chat, "live", (PHONE,), False, kws)
+        assert r.status == "sent" and len(chat.sent) == 2              # allowlisted tester still gets the engine
+        assert c.execute(text("SELECT COUNT(*) FROM audit_log WHERE action='bot.yield'")).scalar() == 1

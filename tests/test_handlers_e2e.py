@@ -93,3 +93,38 @@ def test_T31_T32_cow_reservation_is_atomic_and_history_kept(engine):
         c.execute(text("INSERT INTO cow_history VALUES ('COW-001','reserved','sold','2026-10-13')"))
         assert c.execute(text("SELECT COUNT(*) FROM cow_history")).scalar() == 2
         assert c.execute(text("SELECT state FROM cow WHERE cow_id='COW-001'")).scalar() == "sold"
+
+
+def test_e2e_cancelled_order_and_fulfillment_states_with_ship_after_cancel_alert(engine):
+    """orders/cancelled -> fulfilment_state cancelled, queued jobs cancelled, Shiprocket-verify task;
+    fulfillments/create|update -> awb_created / in_transit / out_for_delivery / delivered / ndr (never 'shipped' at label);
+    a fulfillment on a cancelled order raises an internal ALERT task."""
+    with engine.begin() as c:
+        order = {"id": 777001, "name": "#1777", "total_price": "3500.00", "currency": "INR", "financial_status": "paid",
+                 "payment_gateway_names": ["01 cards, upi, nb, wallets by razorpay"], "customer": {"id": 42}}
+        handlers.handle(c, ev("shopify", "o-1", "shopify.orders.paid", order))
+        f = lambda status, ship=None, n=[0]: (n.__setitem__(0, n[0] + 1), handlers.handle(c, ev("shopify", f"f-{n[0]}", "shopify.fulfillments.update",
+                                                                                              {"id": 5000 + n[0], "order_id": 777001, "status": status, "shipment_status": ship, "tracking_number": "AWB1"})))[1]
+        assert f("success")[0].endswith("unfulfilled -> awb_created (shopify success/-)")
+        st = lambda: c.execute(text("SELECT fulfilment_state FROM order_ref WHERE order_number='#1777'")).scalar()
+        assert st() == "awb_created"
+        f("success", "in_transit"); assert st() == "in_transit"
+        f("success", "out_for_delivery"); assert st() == "out_for_delivery"
+        f("success", "attempted_delivery"); assert st() == "ndr"
+        f("success", "delivered"); assert st() == "delivered"
+        # unknown order -> ignored, no crash
+        assert handlers.handle(c, ev("shopify", "f-x", "shopify.fulfillments.create", {"id": 1, "order_id": 1, "status": "success"}))[0].startswith("fulfillment for unknown order")
+        # cancellation of another order with a queued promo
+        order2 = dict(order, id=777002, name="#1778")
+        handlers.handle(c, ev("shopify", "o-2", "shopify.orders.create", order2))
+        key2 = f"{BRAND}:shopify:order:777002"
+        outbox.enqueue(c, BRAND, f"{key2}:promo", "send_message", "promotional", {"purpose": "x", "channel_type": "whatsapp"}, "2026-10-12T00:00:00Z", None, key2)
+        a = handlers.handle(c, ev("shopify", "o-3", "shopify.orders.cancelled", dict(order2, cancelled_at="2026-10-12T06:55:29Z")))
+        assert a[0] == "order #1778 cancelled; 1 queued jobs cancelled" and "verify Shiprocket" in a[1]
+        assert c.execute(text("SELECT fulfilment_state FROM order_ref WHERE order_key=:k"), {"k": key2}).scalar() == "cancelled"
+        assert c.execute(text("SELECT COUNT(*) FROM outbox_job WHERE job_type='internal_task' AND action_key LIKE '%verify_shiprocket'")).scalar() == 1
+        # Shiprocket books it anyway -> state stays cancelled, ALERT task
+        a = handlers.handle(c, ev("shopify", "f-9", "shopify.fulfillments.create", {"id": 9, "order_id": 777002, "status": "success", "shipment_status": "label_printed", "tracking_number": "AWB9"}))
+        assert any("ALERT" in x for x in a)
+        assert c.execute(text("SELECT fulfilment_state FROM order_ref WHERE order_key=:k"), {"k": key2}).scalar() == "cancelled"
+        assert c.execute(text("SELECT COUNT(*) FROM outbox_job WHERE action_key LIKE '%ship_after_cancel'")).scalar() == 1
