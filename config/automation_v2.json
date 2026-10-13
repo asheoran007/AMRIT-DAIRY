@@ -1,0 +1,30 @@
+{
+  "_status": "DRAFT / INACTIVE - 13 Oct 2026. Authoritative conversation state lives in the adapter engine (conversation_session); BiteSpeed flows are not the state machine. Each V2 stage below is implemented by engine states/intents and is exercised by tests/test_automation_v2.py. Activation = DEPLOYMENT.md §7 cutover checklist (owner approval).",
+  "owner_of_state": "adapter engine (one session per brand+phone; last_options_json for numbered replies)",
+  "transport": "inbound: BiteSpeed console webhook message_created -> /webhooks/inbox/<token>; outbound: console (Chatwoot) API with CHATWOOT_API_TOKEN (official BiteSpeed access pending); SENDER_MODE dry_run|live_test|live; GLOBAL_KILL_SWITCH",
+  "bitespeed_side": {
+    "AD-V2-00 Welcome & Smart Router": "NOT a BiteSpeed flow at cutover: Welcome Message = none, Fallback = none, so the engine answers first contact (menu). Keyword flows AD-01/02/08 triggers removed; FLOW_KEYWORDS_YIELD cleared.",
+    "AD-V2-13 Human Agent Handoff": "engine sets state HANDOFF + private note in the console; agents work the conversation; the engine stays silent while an assignee is set"
+  },
+  "stages": [
+    {"id": "AD-V2-00", "name": "Welcome & Smart Router", "engine": {"state_in": ["NEW", "*"], "intent": ["menu", "unknown", "product"]}, "reply": "menu (ghee / honey / order / track / team) or direct product route", "labels": [], "languages": ["hi", "en", "hinglish"]},
+    {"id": "AD-V2-01", "name": "Ghee Enquiry", "engine": {"state_in": ["*"], "intent": ["product:ghee"]}, "reply": "brand video link + product text + pack list (live Shopify prices, WhatsApp offers)", "labels": ["lead_ghee"], "lead_stage": "enquiry"},
+    {"id": "AD-V2-02", "name": "Honey Enquiry", "engine": {"state_in": ["*"], "intent": ["product:honey"]}, "reply": "product text + pack list (no discount)", "labels": ["lead_honey"], "lead_stage": "enquiry"},
+    {"id": "AD-V2-03", "name": "Product Selection", "engine": {"state_in": ["PACK", "QTY"], "intent": ["pack", "quantity"]}, "reply": "pack confirmation + quantity buttons; unavailable / coming-soon / restricted products never quoted", "labels": []},
+    {"id": "AD-V2-04", "name": "Saved Address Confirmation", "engine": {"state_in": ["QTY"], "to": "ADDRESS_CONFIRM"}, "reply": "masked saved address (area…, city – PIN) + Haan / Badalna hai / Baad mein; full address only after Haan", "labels": []},
+    {"id": "AD-V2-05", "name": "Address Update", "engine": {"state_in": ["ADDRESS_COLLECT"], "intent": ["text"]}, "reply": "parse one-message address (6-digit PIN + city required) -> reconfirm", "labels": []},
+    {"id": "AD-V2-06", "name": "Live Quotation", "engine": {"state_in": ["ADDRESS_CONFIRM"], "intent": ["yes"], "to": "QUOTE"}, "reply": "Shopify draftOrderCalculate: price, GST-inclusive tax, cheapest shipping rate, stock/policy; no rate -> not serviceable", "labels": [], "lead_stage": "address_confirmed"},
+    {"id": "AD-V2-07", "name": "Secure Payment Link", "engine": {"state_in": ["QUOTE"], "intent": ["yes"], "to": "AWAITING_PAYMENT"}, "reply": "draft order (idempotent on quote_ref) + Shopify invoice URL (Razorpay via Shopify checkout)", "labels": ["payment_pending"], "lead_stage": "payment_pending"},
+    {"id": "AD-V2-08", "name": "Payment Verification", "engine": {"state_in": ["AWAITING_PAYMENT"], "event": "shopify.orders.paid"}, "reply": "only after gateway SUCCESS SALE/CAPTURE + amount/variant/qty match; manual 'mark as paid' ignored; replay -> duplicate", "labels": ["payment_verification_pending (on customer 'paid' claim)"]},
+    {"id": "AD-V2-09", "name": "Shopify Order Confirmation", "engine": {"state_in": ["AWAITING_PAYMENT"], "to": "ORDERED"}, "reply": "order number + amount; outbox send_message service job (GuardedSender)", "labels": [], "lead_stage": "ordered"},
+    {"id": "AD-V2-10", "name": "Shipping & Tracking", "engine": {"state_in": ["*"], "intent": ["track"], "event": ["shopify.fulfillments.create", "shopify.fulfillments.update"]}, "reply": "awb_created / in_transit / out_for_delivery / delivered from Shopify fulfillment events; never 'shipped' at label", "labels": []},
+    {"id": "AD-V2-11", "name": "Delivery Exception / NDR", "engine": {"event": "shiprocket.tracking | shopify.fulfillments.update(attempted_delivery|failure)"}, "reply": "internal task for Dispatch team; no automated customer message until a human confirms", "labels": []},
+    {"id": "AD-V2-12", "name": "Cancellation & Returns", "engine": {"event": "shopify.orders.cancelled"}, "reply": "order marked cancelled, promos cancelled, Shiprocket-verify task; fulfillment on a cancelled order -> ALERT", "labels": []},
+    {"id": "AD-V2-13", "name": "Human Agent Handoff", "engine": {"state_in": ["*"], "intent": ["human"], "to": "HANDOFF"}, "reply": "acknowledgement + private note (team Sales / Payment Review / Cow Desk); engine silent while assignee set", "labels": ["human_owner"]},
+    {"id": "AD-V2-14", "name": "Lead Tagging & CRM", "engine": {"every_turn": true}, "reply": "lead table (contact, product, stage) + labels returned on each turn for the console", "labels": ["lead_*", "payment_*", "opt_out", "human_owner"]},
+    {"id": "AD-V2-15", "name": "Customer Preferences & Consent", "engine": {"state_in": ["*"], "intent": ["stop"]}, "reply": "promotional consent withdrawn; service messages only", "labels": ["opt_out"]}
+  ],
+  "reserved": "AD-V2-16..28 unused on purpose (no empty flows)",
+  "single_reply_rule": "exactly one engine turn per inbound message_created; webhook redelivery is a no-op; FLOW_KEYWORDS_YIELD prevents double answers while legacy keyword flows exist",
+  "test_number_isolation": "TEST_PHONE_ALLOWLIST=+918814869007 only: TESTPAY and live_test delivery"
+}

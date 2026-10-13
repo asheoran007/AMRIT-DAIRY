@@ -124,7 +124,8 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
             status = "sent"
         except Exception as exc:
             status, why = "failed", f"{type(exc).__name__}: {exc}"[:200]
-    audit(conn, "bot", "bot.reply", str(conv_id), {"phone_last4": phone[-4:], "state": r.state, "status": status, "reason": why,
-                                                   "chars": len(reply), "handoff": r.handoff, "actions": r.actions})
+    from .engine.v2_map import stage_for
+    audit(conn, "bot", "bot.reply", str(conv_id), {"phone_last4": phone[-4:], "state": r.state, "v2": stage_for(r), "status": status,
+                                                   "reason": why, "chars": len(reply), "handoff": r.handoff, "actions": r.actions})
     log.info("bot.reply conv=%s state=%s status=%s reason=%s chars=%d handoff=%s", conv_id, r.state, status, why, len(reply), r.handoff)
     return ReplyOutcome(status, why, reply, r.state, r.handoff)

@@ -234,11 +234,11 @@ class Engine:
         s["customer_id"] = cust.id if cust else None
         if len(addrs) == 1:
             s["address_json"] = json.dumps(addrs[0].__dict__); s["state"] = "ADDRESS_CONFIRM"; _save(conn, s)
-            return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", f"Aapka pichhla delivery address hamare paas saved hai:\n📍 {addrs[0].summary_hi()}\nKya aapka order isi address par bhejein?",
+            return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", f"Aapka pichhla delivery address hamare paas saved hai:\n📍 {addrs[0].masked_hi()}\nKya aapka order isi address par bhejein?",
                                                        [("addr_yes", "Haan, isi address par"), ("addr_change", "Address change karna hai"), ("addr_later", "Baad mein")])], actions)
         if len(addrs) > 1:
             s["state"] = "ADDRESS_CONFIRM"; s["address_json"] = json.dumps([a.__dict__ for a in addrs]); _save(conn, s)
-            rows = [(f"addr:{i}", a.city[:24], a.summary_hi()[:72]) for i, a in enumerate(addrs[:8])] + [("addr_change", "नया पता", "दूसरा पता भेजें")]
+            rows = [(f"addr:{i}", a.city[:24], a.masked_hi()[:72]) for i, a in enumerate(addrs[:8])] + [("addr_change", "नया पता", "दूसरा पता भेजें")]
             return TurnResult("ADDRESS_CONFIRM", [Msg("list", "आपके कई पते saved हैं — किस पर भेजें?", rows=rows)], actions)
         s["state"] = "ADDRESS_COLLECT"; _save(conn, s)
         return TurnResult("ADDRESS_COLLECT", [self._address_prompt()], actions)
@@ -358,8 +358,8 @@ class Engine:
 
     def _track(self, conn, s, actions) -> TurnResult:
         if s.get("shopify_order_name"):
-            return TurnResult(s["state"], [Msg("text", f"📦 ऑर्डर {s['shopify_order_name']}: स्थिति की जानकारी dispatch के बाद tracking लिंक के साथ आएगी।")], actions)
-        return TurnResult(s["state"], [Msg("text", "📦 अपना ऑर्डर नंबर (जैसे #1150) भेजें — हम स्थिति बताएँगे।")], actions + ["label:order_intent"])
+            return TurnResult(s["state"], [Msg("text", f"📦 ऑर्डर {s['shopify_order_name']}: स्थिति की जानकारी dispatch के बाद tracking लिंक के साथ आएगी।")], actions + ["track:known_order"])
+        return TurnResult(s["state"], [Msg("text", "📦 अपना ऑर्डर नंबर (जैसे #1150) भेजें — हम स्थिति बताएँगे।")], actions + ["label:order_intent", "track:ask_number"])
 
 
 def _numbered_choice(text_in: str, last_options_json: str | None) -> str | None:

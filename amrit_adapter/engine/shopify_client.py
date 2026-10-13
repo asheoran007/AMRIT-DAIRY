@@ -65,6 +65,13 @@ class Address:
         line2 = f", {self.address2}" if self.address2 else ""
         return f"{self.name}, {self.address1}{line2}, {self.city}, {self.province} – {self.zip}"
 
+    def masked_hi(self) -> str:
+        """Shown BEFORE the customer confirms a saved address: enough to recognise it (area start, city, PIN), never the
+        full house/street line - a shared or forwarded phone must not leak the complete address."""
+        head = self.address1.strip()
+        head = head[:12].rstrip(" ,") + "…" if len(head) > 12 else head
+        return f"{self.name.split(' ')[0]}, {head}, {self.city} – {self.zip}"
+
     def to_shopify(self) -> dict[str, Any]:
         return {"firstName": self.name.split(" ")[0], "lastName": " ".join(self.name.split(" ")[1:]) or ".",
                 "address1": self.address1, "address2": self.address2 or None, "city": self.city, "province": self.province,
