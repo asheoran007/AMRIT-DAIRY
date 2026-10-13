@@ -152,3 +152,23 @@ def test_inbox_rejects_everything_while_no_token_is_configured(monkeypatch):
     assert c.post("/webhooks/inbox/", json=inbound(mid=int(time.time()) % 10**9)).status_code == 401
     assert c.post("/webhooks/inbox/anything", json=inbound(mid=int(time.time()) % 10**9)).status_code == 401
     assert c.post("/bot/turn/anything", json={"phone": PHONE, "text": "hi"}).status_code == 401
+
+
+def test_access_log_redacts_tokens_and_health_reports_inbox_stats(monkeypatch):
+    import logging
+    from amrit_adapter.worker import _RedactTokens
+    f = _RedactTokens()
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '"POST /webhooks/inbox/abc%2Fdef= HTTP/1.1" 200 OK  GET /bot/turn/zzz GET /x?token=sec&y=1', (), None)
+    assert f.filter(rec) and "abc" not in rec.getMessage() and "zzz" not in rec.getMessage() and "sec" not in rec.getMessage()
+    assert "/webhooks/inbox/<redacted>" in rec.getMessage() and "token=<redacted>" in rec.getMessage()
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "dry_run")
+    c = TestClient(api.app)
+    before = dict(api.inbox_stats)
+    c.post("/webhooks/inbox/wrong", json=inbound())
+    mid = int(time.time() * 1000) % 10**9
+    c.post("/webhooks/inbox/t0k", json=inbound(mid=mid)); c.post("/webhooks/inbox/t0k", json=inbound(mid=mid))
+    h = c.get("/health").json()["inbox"]
+    assert h["rejected"] == before["rejected"] + 1 and h["accepted"] == before["accepted"] + 1 and h["duplicates"] == before["duplicates"] + 1
+    assert h["last_accepted"]["conversation_id"] == 777 and h["last_accepted"]["result"].startswith("dry_run")

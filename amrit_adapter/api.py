@@ -45,7 +45,7 @@ def health() -> dict:
     return {"ok": True, "release": settings.release, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
             "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status,
-            "backup": _backup_status()}
+            "backup": _backup_status(), "inbox": inbox_stats}
 
 
 def _backup_status() -> dict:
@@ -217,22 +217,31 @@ def shopify_auth_callback(request: Request) -> Response:
                     content=f"Amrit adapter installed on {shop}. scopes={body.get('scope')}.\n{wh_line}\nYou can close this tab.")
 
 
+inbox_stats: dict = {"accepted": 0, "rejected": 0, "duplicates": 0, "last_accepted": None, "last_rejected_at": None}
+
+
 @app.post("/webhooks/inbox/{token:path}")   # Render-generated tokens may contain "/" and "="
 async def inbox_webhook(token: str, request: Request) -> Response:
     """BiteSpeed support console (account 3122) -> Settings -> Integrations -> Webhooks.
     URL to register: https://<host>/webhooks/inbox/<INBOX_WEBHOOK_TOKEN>. Hint-level auth only."""
+    from .db import now_iso as _now
     raw = await request.body()
     try:
         level = v.verify_inbox_webhook(token, settings.inbox_webhook_token)
         ev = v.normalize_inbox_webhook(raw, settings.adapter_brand_id, level)
     except v.WebhookRejected as exc:
+        inbox_stats["rejected"] += 1; inbox_stats["last_rejected_at"] = _now()
         return Response(status_code=401, content=str(exc))
     import json as _j
     from .conversation import handle_inbound
+    conv = (ev.payload.get("conversation") or {}).get("id") or ev.payload.get("conversation_id")
     with tx(engine) as conn:
         res = persist_event(conn, ev)
         if res.duplicate:
+            inbox_stats["duplicates"] += 1
             return Response(status_code=200, content="duplicate")
+        inbox_stats["accepted"] += 1
+        summary = {"event": ev.event_type.split(".", 1)[1], "conversation_id": conv, "event_id": res.event_id, "received_at": ev.received_at, "result": None}
         if ev.event_type == "bitespeed_inbox.message_created":
             try:
                 out = handle_inbound(conn, ev.payload, build_engine, _chatwoot(), settings.sender_mode, _allowlist(),
@@ -240,9 +249,12 @@ async def inbox_webhook(token: str, request: Request) -> Response:
                                      tuple(k.strip() for k in settings.flow_keywords_yield.split(",") if k.strip()))
             except Exception:
                 log.exception("inbound message handling failed (event stays persisted)")
+                summary["result"] = "error-logged"; inbox_stats["last_accepted"] = summary
                 return Response(status_code=200, content="error-logged")
+            summary["result"] = f"{out.status}: {out.reason}"; inbox_stats["last_accepted"] = summary
             return Response(status_code=200, media_type="application/json",
                             content=_j.dumps({"status": out.status, "reason": out.reason, "state": out.state}))
+        inbox_stats["last_accepted"] = summary
     return Response(status_code=200)
 
 

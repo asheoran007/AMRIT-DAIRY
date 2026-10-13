@@ -23,9 +23,33 @@ from .sender import ChatwootSender, DryRunSender, GuardedSender
 log = logging.getLogger("amrit.worker")
 
 
+class _RedactTokens(logging.Filter):
+    """Access/other log lines must never carry a token: /webhooks/inbox/<t>, /bot/turn/<t>, ?token=<t>."""
+    import re as _re
+    _pat = _re.compile(r"(/webhooks/inbox/|/bot/turn/)[^ \"?]+|([?&]token=)[^ &\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+            red = self._pat.sub(lambda m: (m.group(1) or m.group(2)) + "<redacted>", msg)
+            if red != msg:
+                record.msg, record.args = red, ()
+        except Exception:
+            pass
+        return True
+
+
 def setup_logging() -> None:
-    """One line per event, no secrets, no customer PII beyond ids; stdout -> docker/journald."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    """One line per event, no secrets, no customer PII beyond ids; stdout -> docker/journald.
+    force=True: uvicorn configures the root logger first, so a plain basicConfig would be a no-op and app INFO lines
+    (bot.reply, shopify webhooks, backups) would never reach the Render log."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s", force=True)
+    flt = _RedactTokens()
+    for name in ("uvicorn.access", "uvicorn.error", "uvicorn", ""):
+        lg = logging.getLogger(name)
+        lg.addFilter(flt)
+        for h in lg.handlers:
+            h.addFilter(flt)
 
 
 def build_policy() -> outbox.Policy:
