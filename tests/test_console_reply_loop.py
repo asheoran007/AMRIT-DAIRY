@@ -141,3 +141,14 @@ def test_engine_yields_to_active_bitespeed_keyword_flows_except_for_test_numbers
         r = cv.handle_inbound(c, inbound("ghee", mid=13), build, chat, "live", (PHONE,), False, kws)
         assert r.status == "sent" and len(chat.sent) == 2              # allowlisted tester still gets the engine
         assert c.execute(text("SELECT COUNT(*) FROM audit_log WHERE action='bot.yield'")).scalar() == 1
+
+
+def test_inbox_rejects_everything_while_no_token_is_configured(monkeypatch):
+    """Token rotation window (var deleted, not yet regenerated): nothing is accepted, nothing is processed."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "")
+    c = TestClient(api.app)
+    assert c.post("/webhooks/inbox/", json=inbound(mid=int(time.time()) % 10**9)).status_code == 401
+    assert c.post("/webhooks/inbox/anything", json=inbound(mid=int(time.time()) % 10**9)).status_code == 401
+    assert c.post("/bot/turn/anything", json={"phone": PHONE, "text": "hi"}).status_code == 401

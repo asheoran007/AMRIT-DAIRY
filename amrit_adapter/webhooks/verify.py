@@ -92,7 +92,8 @@ def verify_inbox_webhook(path_token: str, expected_token: str) -> str:
     """Support-console webhooks (Settings -> Integrations -> Webhooks) carry no signature; the only
     control is an unguessable token embedded in the URL path. Treated as static_token_hint."""
     if not expected_token:
-        return "unauthenticated"
+        # No token configured (e.g. during a rotation) -> accept nothing: the engine must never run on unauthenticated input.
+        raise WebhookRejected("inbox webhook token not configured")
     if not hmac.compare_digest(path_token or "", expected_token):
         raise WebhookRejected("inbox webhook token mismatch")
     return "static_token_hint"
