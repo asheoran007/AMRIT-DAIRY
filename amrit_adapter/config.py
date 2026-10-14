@@ -60,7 +60,12 @@ class Settings(BaseSettings):
     shiprocket_api_email: str = ""
     shiprocket_api_password: str = ""
 
+    # Official BiteSpeed shop-scoped Messaging API (owner obtained the key 15 Oct). The key lives ONLY in Render env
+    # BITESPEED_API_KEY (never in CHATWOOT_API_TOKEN, never in the repo). Base URL / endpoints are filled in from the
+    # official BiteSpeed documentation before any send - until then /health reports the key as present-but-unverified
+    # and nothing uses it.
     bitespeed_api_key: str = ""
+    bitespeed_api_base: str = ""        # from official docs, e.g. https://<host>/<version>; empty = not yet verified
     inbox_webhook_token: str = ""   # unguessable token embedded in the support-console webhook URL
     test_phone_allowlist: str = ""  # comma-separated E.164 numbers allowed to run TESTPAY (₹10 real gateway test); empty = disabled
     test_payment_minor: int = 1000  # ₹10

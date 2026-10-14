@@ -161,6 +161,14 @@ def test_access_log_redacts_tokens_and_health_reports_inbox_stats(monkeypatch):
     rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '"POST /webhooks/inbox/abc%2Fdef= HTTP/1.1" 200 OK  GET /bot/turn/zzz GET /x?token=sec&y=1', (), None)
     assert f.filter(rec) and "abc" not in rec.getMessage() and "zzz" not in rec.getMessage() and "sec" not in rec.getMessage()
     assert "/webhooks/inbox/<redacted>" in rec.getMessage() and "token=<redacted>" in rec.getMessage()
+    # Regression (Render log 14-15 Oct: 'ValueError: not enough values to unpack (expected 5, got 0)'): a real uvicorn
+    # access record carries 5 args and uvicorn's AccessFormatter unpacks them - redaction must keep them intact.
+    from uvicorn.logging import AccessFormatter
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("10.0.0.1:1", "POST", "/webhooks/inbox/abc%2Fdef=", "1.1", 200), None)
+    assert f.filter(rec) and len(rec.args) == 5 and rec.args[4] == 200
+    line = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(rec)
+    assert "abc" not in line and '/webhooks/inbox/<redacted>' in line and "200" in line
     import amrit_adapter.api as api
     from amrit_adapter.config import settings
     monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "dry_run")
@@ -192,3 +200,20 @@ def test_console_auth_status_is_read_only_and_reported(monkeypatch):
     assert calls and calls[0][0].endswith("/api/v1/profile") and calls[0][1] == "cw-secret"
     h = TestClient(api.app).get("/health").json()
     assert h["console_auth"]["status"] == "ok" and "checked_at" not in h["console_auth"] and "cw-secret" not in str(h)
+
+
+def test_health_reports_bitespeed_messaging_api_presence_without_using_it(monkeypatch):
+    """BITESPEED_API_KEY (official shop-scoped Messaging API) is reported as present/absent only - never its value - and is
+    not used for sending until the official docs fix the base URL/endpoints (used_for_sending stays False)."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    c = TestClient(api.app)
+    monkeypatch.setattr(settings, "bitespeed_api_key", ""); monkeypatch.setattr(settings, "bitespeed_api_base", "")
+    assert c.get("/health").json()["bitespeed_api"] == {"configured": False, "base_url_set": False, "status": "not_configured", "used_for_sending": False}
+    monkeypatch.setattr(settings, "bitespeed_api_key", "bsk_live_secret_value_1234567890")
+    body = c.get("/health").text
+    b = c.get("/health").json()["bitespeed_api"]
+    assert b["configured"] is True and b["status"] == "key_present_awaiting_docs" and b["used_for_sending"] is False
+    assert "bsk_live" not in body and "1234567890" not in body
+    monkeypatch.setattr(settings, "bitespeed_api_base", "https://example.invalid/v1")
+    assert c.get("/health").json()["bitespeed_api"]["status"] == "key_and_base_present_unverified"

@@ -28,12 +28,21 @@ class _RedactTokens(logging.Filter):
     import re as _re
     _pat = _re.compile(r"(/webhooks/inbox/|/bot/turn/)[^ \"?]+|([?&]token=)[^ &\"]+")
 
+    def _redact(self, s: str) -> str:
+        return self._pat.sub(lambda m: (m.group(1) or m.group(2)) + "<redacted>", s)
+
     def filter(self, record: logging.LogRecord) -> bool:
+        """Redact IN PLACE, preserving record.args: uvicorn's AccessFormatter unpacks exactly 5 args
+        (client_addr, method, full_path, http_version, status_code) from every uvicorn.access record, so collapsing
+        args to () made the handler raise 'ValueError: not enough values to unpack (expected 5, got 0)' and drop the
+        line for every inbound webhook request (seen in the Render log 14-15 Oct). Only str args are touched."""
         try:
-            msg = record.getMessage()
-            red = self._pat.sub(lambda m: (m.group(1) or m.group(2)) + "<redacted>", msg)
-            if red != msg:
-                record.msg, record.args = red, ()
+            if isinstance(record.args, tuple) and record.args:
+                record.args = tuple(self._redact(a) if isinstance(a, str) else a for a in record.args)
+            elif isinstance(record.args, dict):
+                record.args = {k: (self._redact(a) if isinstance(a, str) else a) for k, a in record.args.items()}
+            if isinstance(record.msg, str):
+                record.msg = self._redact(record.msg)
         except Exception:
             pass
         return True

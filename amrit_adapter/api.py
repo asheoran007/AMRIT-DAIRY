@@ -44,6 +44,7 @@ def health() -> dict:
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "release": settings.release, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
             "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token), "console_auth": {k: v for k, v in console_auth_status().items() if k != "checked_at"},
+            "bitespeed_api": bitespeed_api_status(),
             "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status,
             "backup": _backup_status(), "inbox": inbox_stats}
 
@@ -124,6 +125,19 @@ def console_auth_status(force: bool = False) -> dict:
     except Exception as exc:
         _console_check.update(status=f"error_{type(exc).__name__}", agent=None, accounts_ok=None)
     return _console_check
+
+
+def bitespeed_api_status() -> dict:
+    """Official BiteSpeed Messaging API readiness. Reports presence only (never the value, never a prefix): a send path
+    is wired up only after the official documentation fixes base URL, auth header and endpoints (DEPLOYMENT.md §4c)."""
+    key, base = bool(settings.bitespeed_api_key), bool(settings.bitespeed_api_base)
+    if not key:
+        status = "not_configured"
+    elif not base:
+        status = "key_present_awaiting_docs"
+    else:
+        status = "key_and_base_present_unverified"
+    return {"configured": key, "base_url_set": base, "status": status, "used_for_sending": False}
 
 
 def _chatwoot():
