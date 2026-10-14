@@ -43,7 +43,7 @@ def health() -> dict:
         queued = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status='queued'")).scalar()
         dead = conn.execute(text("SELECT COUNT(*) FROM outbox_job WHERE status IN ('dead_letter','reconcile_required')")).scalar()
     return {"ok": True, "release": settings.release, "sender_mode": settings.sender_mode, "kill_switch": settings.global_kill_switch, "queued": queued, "needs_attention": dead,
-            "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token),
+            "embedded_worker": settings.adapter_embed_worker, "console_api": bool(settings.chatwoot_api_token), "console_auth": {k: v for k, v in console_auth_status().items() if k != "checked_at"},
             "shopify": settings.shopify_auth_mode, "shopify_webhooks": _worker_mod().webhook_status,
             "backup": _backup_status(), "inbox": inbox_stats}
 
@@ -98,6 +98,32 @@ def build_engine():
 
 def _allowlist() -> tuple[str, ...]:
     return tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip())
+
+
+_console_check: dict = {"checked_at": None, "status": None, "agent": None, "accounts_ok": None}
+
+
+def console_auth_status(force: bool = False) -> dict:
+    """Read-only check of CHATWOOT_API_TOKEN: GET /api/v1/profile (sends nothing). Cached 10 min; shown on /health as
+    console_auth so the owner can confirm the official token works before any live_test."""
+    import time as _t
+    import httpx as _x
+    if not settings.chatwoot_api_token:
+        _console_check.update(status="not_configured", agent=None, accounts_ok=None); return _console_check
+    if not force and _console_check["checked_at"] and _t.time() - _console_check["checked_at"] < 600:
+        return _console_check
+    _console_check["checked_at"] = _t.time()
+    try:
+        r = _x.get(f"{settings.chatwoot_base_url.rstrip('/')}/api/v1/profile", headers={"api_access_token": settings.chatwoot_api_token}, timeout=15)
+        if r.status_code == 200:
+            p = r.json()
+            ids = {int(x.get("id")) for x in (p.get("accounts") or []) if x.get("id") is not None}
+            _console_check.update(status="ok", agent=p.get("name"), accounts_ok=settings.chatwoot_account_id in ids)
+        else:
+            _console_check.update(status=f"http_{r.status_code}", agent=None, accounts_ok=None)
+    except Exception as exc:
+        _console_check.update(status=f"error_{type(exc).__name__}", agent=None, accounts_ok=None)
+    return _console_check
 
 
 def _chatwoot():

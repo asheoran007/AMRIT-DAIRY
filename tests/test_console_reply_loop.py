@@ -172,3 +172,23 @@ def test_access_log_redacts_tokens_and_health_reports_inbox_stats(monkeypatch):
     h = c.get("/health").json()["inbox"]
     assert h["rejected"] == before["rejected"] + 1 and h["accepted"] == before["accepted"] + 1 and h["duplicates"] == before["duplicates"] + 1
     assert h["last_accepted"]["conversation_id"] == 777 and h["last_accepted"]["result"].startswith("dry_run")
+
+
+def test_console_auth_status_is_read_only_and_reported(monkeypatch):
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "chatwoot_api_token", ""); api._console_check.update(checked_at=None)
+    assert api.console_auth_status(force=True)["status"] == "not_configured"
+    monkeypatch.setattr(settings, "chatwoot_api_token", "cw-secret")
+    calls = []
+    class R:
+        status_code = 200
+        def json(self): return {"id": 1, "name": "Amrit Dairy Care", "accounts": [{"id": 3122}]}
+    monkeypatch.setattr(api, "console_auth_status", api.console_auth_status)
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, headers=None, timeout=None: (calls.append((url, headers["api_access_token"])), R())[1])
+    st = api.console_auth_status(force=True)
+    assert st["status"] == "ok" and st["agent"] == "Amrit Dairy Care" and st["accounts_ok"] is True
+    assert calls and calls[0][0].endswith("/api/v1/profile") and calls[0][1] == "cw-secret"
+    h = TestClient(api.app).get("/health").json()
+    assert h["console_auth"]["status"] == "ok" and "checked_at" not in h["console_auth"] and "cw-secret" not in str(h)
