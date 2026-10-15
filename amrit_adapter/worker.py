@@ -17,7 +17,7 @@ from . import backup, handlers, outbox, reports
 from .config import settings
 from .db import make_engine, migrate, now_iso, tx
 from .envelope import InternalEvent
-from .sender import ChatwootSender, DryRunSender, GuardedSender
+from .sender import BitespeedApiSender, ChatwootSender, DryRunSender, GuardedSender
 
 
 log = logging.getLogger("amrit.worker")
@@ -75,10 +75,17 @@ def build_policy() -> outbox.Policy:
 
 
 def build_sender():
-    """Outbox sender under SENDER_MODE. Without CHATWOOT_API_TOKEN every mode degrades to dry-run (nothing can be delivered)."""
-    if settings.sender_mode in ("live", "live_test") and settings.chatwoot_api_token:
-        inner = ChatwootSender(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)
-        return GuardedSender(inner, settings.sender_mode, tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip()))
+    """Outbox sender under SENDER_MODE: official Messaging API first, else console API; without either every mode degrades
+    to dry-run (nothing can be delivered)."""
+    if settings.sender_mode in ("live", "live_test"):
+        inner = None
+        client = settings.bitespeed_client()
+        if client is not None:
+            inner = BitespeedApiSender(client)
+        elif settings.chatwoot_api_token:
+            inner = ChatwootSender(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)
+        if inner is not None:
+            return GuardedSender(inner, settings.sender_mode, tuple(x.strip() for x in settings.test_phone_allowlist.split(",") if x.strip()))
     return DryRunSender()
 
 

@@ -4,7 +4,7 @@ Conversational replies go out synchronously from the inbox webhook (conversation
 (scheduled/service jobs such as the paid-order confirmation): the BiteSpeed support console is Chatwoot, whose API is
 documented, so ChatwootSender finds the contact by phone, picks its latest conversation and posts an outgoing message.
 GuardedSender enforces SENDER_MODE (dry_run | live_test = TEST_PHONE_ALLOWLIST only | live) in front of it.
-BiteSpeed's own marketing/template send API has no public contract (checked 2026-10-11): LiveBiteSpeedSender still raises.
+BiteSpeed's official Messaging API (doc received 2026-10-16) is served by BitespeedApiSender and preferred when configured.
 """
 from __future__ import annotations
 
@@ -69,6 +69,30 @@ class ChatwootSender:
                             json={"content": payload.get("message") or "", "message_type": "outgoing", "private": False})
             return SendResult("sent", f"chatwoot:{res.get('id')}", 0, f"conversation {conv}")
         except Exception as exc:  # network ambiguity -> reconcile path, never blind retry
+            kind = type(exc).__name__
+            if "Timeout" in kind:
+                return SendResult("unknown_timeout", None, 0, f"{kind}: provider may have accepted the request")
+            return SendResult("failed", None, 0, f"{kind}: {exc}"[:200])
+
+
+class BitespeedApiSender:
+    """Outbox -> official BiteSpeed Messaging API: payload {"phone": "+91...", "message": "..."} as a free-text message
+    (24 h customer-service window) or {"template_id": ..., "variables": {...}} as a template message."""
+
+    def __init__(self, client) -> None:
+        self.client = client
+
+    def send(self, action_key: str, payload: dict) -> SendResult:
+        try:
+            phone = str(payload.get("phone") or "")
+            if payload.get("template_id"):
+                res = self.client.send_template(phone, payload["template_id"], dict(payload.get("variables") or {}), third_party_id=action_key)
+            else:
+                res = self.client.send_text(phone, payload.get("message") or "", third_party_id=action_key)
+            if res.ok:
+                return SendResult("sent", f"bitespeed:{res.third_party_id or action_key}", 0, res.message)
+            return SendResult("failed", None, 0, f"HTTP {res.http}: {res.message}")
+        except Exception as exc:
             kind = type(exc).__name__
             if "Timeout" in kind:
                 return SendResult("unknown_timeout", None, 0, f"{kind}: provider may have accepted the request")

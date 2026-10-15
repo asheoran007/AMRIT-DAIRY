@@ -65,7 +65,16 @@ class Settings(BaseSettings):
     # official BiteSpeed documentation before any send - until then /health reports the key as present-but-unverified
     # and nothing uses it.
     bitespeed_api_key: str = ""
-    bitespeed_api_base: str = ""        # from official docs, e.g. https://<host>/<version>; empty = not yet verified
+    bitespeed_api_base: str = "https://2lkkwxk9b6.execute-api.us-east-1.amazonaws.com/whatsapp/messages/send/template"  # official doc 16 Oct
+    bitespeed_channel_id: str = ""      # store WhatsApp number as digits (doc: "in most cases same as phone number"); BiteSpeed provides it
+
+    @property
+    def bitespeed_api_ready(self) -> bool:
+        return bool(self.bitespeed_api_key and self.bitespeed_channel_id and self.bitespeed_api_base)
+
+    def bitespeed_client(self):
+        from .bitespeed_api import BitespeedMessagingClient
+        return BitespeedMessagingClient(self.bitespeed_api_key, self.bitespeed_channel_id, self.bitespeed_api_base) if self.bitespeed_api_ready else None
     inbox_webhook_token: str = ""   # unguessable token embedded in the support-console webhook URL
     test_phone_allowlist: str = ""  # comma-separated E.164 numbers allowed to run TESTPAY (₹10 real gateway test); empty = disabled
     test_payment_minor: int = 1000  # ₹10

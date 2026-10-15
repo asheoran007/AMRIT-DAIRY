@@ -128,20 +128,32 @@ def console_auth_status(force: bool = False) -> dict:
 
 
 def bitespeed_api_status() -> dict:
-    """Official BiteSpeed Messaging API readiness. Reports presence only (never the value, never a prefix): a send path
-    is wired up only after the official documentation fixes base URL, auth header and endpoints (DEPLOYMENT.md §4c)."""
-    key, base = bool(settings.bitespeed_api_key), bool(settings.bitespeed_api_base)
+    """Official BiteSpeed Messaging API readiness (doc received 16 Oct; DEPLOYMENT.md §4b-ii). Presence only - never the
+    key. The API has no probe endpoint, so `verified` flips only after a real send succeeded (controlled live_test)."""
+    from . import bitespeed_api as _b
+    key, chan = bool(settings.bitespeed_api_key), bool(settings.bitespeed_channel_id)
+    ready = settings.bitespeed_api_ready
     if not key:
-        status = "not_configured"
-    elif not base:
-        status = "key_present_awaiting_docs"
+        st = "not_configured"
+    elif not chan:
+        st = "key_present_missing_channel_id"
+    elif _b.status["last_outcome"] == "queued":
+        st = "ok"
+    elif _b.status["last_outcome"]:
+        st = f"last_send_{_b.status['last_outcome']}"
     else:
-        status = "key_and_base_present_unverified"
-    return {"configured": key, "base_url_set": base, "status": status, "used_for_sending": False}
+        st = "ready_unverified_no_probe_endpoint"
+    return {"configured": key, "channel_id_set": chan, "status": st, "used_for_sending": ready, "verified": _b.status["last_outcome"] == "queued",
+            "last_send": {k: _b.status[k] for k in ("last_send_at", "last_outcome", "last_http", "sent", "failed")}}
 
 
 def _chatwoot():
+    """Reply channel for inbound turns: official Messaging API when configured, else the console (Chatwoot) API, else None."""
+    from .bitespeed_api import BitespeedReplyChannel
     from .conversation import ChatwootClient
+    client = settings.bitespeed_client()
+    if client is not None:
+        return BitespeedReplyChannel(client)
     if not settings.chatwoot_api_token:
         return None
     return ChatwootClient(settings.chatwoot_base_url, settings.chatwoot_account_id, settings.chatwoot_api_token)

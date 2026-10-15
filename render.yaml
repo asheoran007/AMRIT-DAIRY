@@ -23,7 +23,7 @@ services:
       - key: ADAPTER_EMBED_WORKER
         value: "true"
       - key: RELEASE               # bump per release: the Blueprint sync applies the env change and redeploys the latest commit
-        value: "2026-10-15.2"
+        value: "2026-10-16.1"
       - key: ADAPTER_BRAND_ID
         value: amrit_dairy
       - key: SHOPIFY_SHOP_DOMAIN
@@ -34,8 +34,10 @@ services:
         value: dry_run            # dry_run | live_test (TEST_PHONE_ALLOWLIST only) | live
       - key: CHATWOOT_API_TOKEN   # support console (chat.bitespeed.co) agent access token ONLY; set in dashboard. Never the Messaging API key.
         sync: false
-      - key: BITESPEED_API_KEY    # official shop-scoped BiteSpeed Messaging API key; set in dashboard. Unused until BITESPEED_API_BASE is set from official docs.
+      - key: BITESPEED_API_KEY    # official shop-scoped BiteSpeed Messaging API key (X-API-Key); set in dashboard only
         sync: false
+      - key: BITESPEED_CHANNEL_ID # store WhatsApp number as digits (doc: "in most cases same as phone number"); marketing.bitespeed.co -> Settings -> WhatsApp
+        value: "917700004877"
       - key: FLOW_KEYWORDS_YIELD   # exact trigger words of live flows AD-01 (ghee) / AD-02 (honey) / AD-08 (milk), read 13 Oct; clear at go-live
         value: "ghee,घी,ghi,bilona,बिलोना,desi ghee,cow ghee,golden ghee,honey,शहद,हनी,shehad,natural honey,organic honey,raw honey,honey price,buy honey,milk,दूध,dudh,cow milk,desi cow milk,a2 milk,milk price"
       - key: GLOBAL_KILL_SWITCH

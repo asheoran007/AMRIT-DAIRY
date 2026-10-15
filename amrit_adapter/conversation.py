@@ -112,7 +112,9 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
     else:
         outcome, why = "dry_run", f"sender_mode={sender_mode}"
     if outcome == "send" and chat is None:
-        outcome, why = "dry_run", "CHATWOOT_API_TOKEN not configured"
+        outcome, why = "dry_run", "no reply channel configured (BITESPEED_API_KEY+CHANNEL_ID or CHATWOOT_API_TOKEN)"
+    if chat is not None and hasattr(chat, "for_phone"):
+        chat = chat.for_phone(phone)       # Messaging API channel: replies address the customer's number, not a console conversation
 
     status = outcome
     if outcome == "send":
