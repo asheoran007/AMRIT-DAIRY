@@ -200,3 +200,19 @@ def test_console_auth_status_is_read_only_and_reported(monkeypatch):
     assert calls and calls[0][0].endswith("/api/v1/profile") and calls[0][1] == "cw-secret"
     h = TestClient(api.app).get("/health").json()
     assert h["console_auth"]["status"] == "ok" and "checked_at" not in h["console_auth"] and "cw-secret" not in str(h)
+
+
+def test_incoming_messages_without_top_level_id_are_not_deduped_against_each_other(monkeypatch):
+    """Live finding 16 Oct: BiteSpeed delivered incoming customer messages with no top-level message id / created_at,
+    so two different messages from one conversation collided on the dedupe key. Distinct bodies must both be accepted;
+    an identical redelivery must still be a duplicate."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "dry_run")
+    c = TestClient(api.app)
+    conv = int(time.time() * 1000) % 10**9
+    def body(content):
+        b = inbound(content); b.pop("id"); b.pop("created_at"); b["conversation"]["id"] = conv; return b
+    assert c.post("/webhooks/inbox/t0k", json=body("hi")).json()["status"] == "dry_run"
+    assert c.post("/webhooks/inbox/t0k", json=body("hi 2")).json()["status"] == "dry_run"      # different message: accepted
+    assert c.post("/webhooks/inbox/t0k", json=body("hi 2")).text == "duplicate"                 # exact redelivery: deduped

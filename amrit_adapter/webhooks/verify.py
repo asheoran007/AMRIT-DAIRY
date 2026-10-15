@@ -106,10 +106,14 @@ def normalize_inbox_webhook(raw_body: bytes, brand_id: str, auth_level: str) -> 
     created = str(body.get("created_at") or "")
     if not obj_id:
         raise WebhookRejected("inbox payload without id")
+    # Dedupe key = event + object + created_at + digest of the delivered body. Live finding 16 Oct: incoming customer
+    # messages arrive with the message id/created_at missing at top level, so "event:conversation_id:" collided with
+    # every earlier incoming message and the engine never ran. Identical redeliveries still dedupe (same body).
+    digest = hashlib.sha256(raw_body).hexdigest()[:16]
     return InternalEvent(
         brand_id=brand_id,
         source="bitespeed_inbox",
-        source_event_id=f"{event}:{obj_id}:{created}",
+        source_event_id=f"{event}:{obj_id}:{created}:{digest}",
         source_object_id=obj_id,
         event_type=f"bitespeed_inbox.{event}",
         occurred_at=created,
