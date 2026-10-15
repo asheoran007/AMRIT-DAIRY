@@ -74,8 +74,13 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
     Allowlisted test numbers are exempt so the engine journey can be tested end to end before the flows are retired."""
     if body.get("event") != "message_created":
         return ReplyOutcome("skipped", f"event {body.get('event')}")
-    if body.get("message_type") not in ("incoming", 0):
-        return ReplyOutcome("skipped", "not an incoming message")
+    mtype = body.get("message_type")
+    log.info("inbox message_created conv=%s type=%r private=%r content_len=%d sender_last4=%s id=%s assignee=%r",
+             (body.get("conversation") or {}).get("id"), mtype, body.get("private"), len(str(body.get("content") or "")),
+             _phone(body)[-4:], "y" if body.get("id") else "n",
+             (body.get("conversation") or {}).get("assignee_id") or (((body.get("conversation") or {}).get("meta") or {}).get("assignee") or {}).get("id"))
+    if mtype not in ("incoming", 0, "0"):
+        return ReplyOutcome("skipped", f"not an incoming message (type={mtype!r})")
     if body.get("private"):
         return ReplyOutcome("skipped", "private note")
     conv = body.get("conversation") or {}
