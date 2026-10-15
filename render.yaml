@@ -23,7 +23,7 @@ services:
       - key: ADAPTER_EMBED_WORKER
         value: "true"
       - key: RELEASE               # bump per release: the Blueprint sync applies the env change and redeploys the latest commit
-        value: "2026-10-16.5"
+        value: "2026-10-16.6"
       - key: ADAPTER_BRAND_ID
         value: amrit_dairy
       - key: SHOPIFY_SHOP_DOMAIN

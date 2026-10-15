@@ -153,3 +153,13 @@ def test_flow_builder_turn_tolerates_variable_aliases_and_unresolved_templates(m
     j = c.post("/bot/turn/t0k", json=body).json()
     assert j["reply_text"] and j["delivery"]["status"] == "dry_run"
     assert c.post("/bot/turn/t0k", json={"phone": "{{phone}}", "text": "hi"}).status_code == 400
+
+
+def test_flow_builder_turn_finds_phone_and_text_under_unknown_variable_names(monkeypatch, fake_post):
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "dry_run")
+    c = TestClient(api.app)
+    body = {"a": "{{phone}}", "contact": {"phoneNumber": PHONE.lstrip("+"), "firstName": "Amit"}, "msg": "products dikhao", "x": ""}
+    j = c.post("/bot/turn/t0k", json=body).json()
+    assert j["reply_text"] and j["delivery"]["status"] == "dry_run"

@@ -169,18 +169,36 @@ async def bot_turn(token: str, request: Request) -> Response:
     if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
         return Response(status_code=401, content="bad token")
     body = _j.loads((await request.body()) or b"{}")
+    import re as _re
+
+    def _flat(d, pre=""):
+        out = {}
+        for k, val in (d or {}).items():
+            if isinstance(val, dict):
+                out.update(_flat(val, f"{pre}{k}."))
+            else:
+                out[f"{pre}{k}"] = val
+        return out
+    flat = _flat(body)
+    def _ok(val):
+        return isinstance(val, (str, int)) and str(val).strip() != "" and "{{" not in str(val)
     def _pick(*keys):
-        """First key whose value is a real string (BiteSpeed leaves unresolved template variables as '{{x}}')."""
         for k in keys:
-            val = str(body.get(k) or "").strip()
-            if val and "{{" not in val:
-                return val
+            if _ok(flat.get(k)):
+                return str(flat[k]).strip()
         return ""
     phone = _pick("phone", "phone_number", "mobile", "customer_phone", "contact_phone", "whatsapp_number")
+    if not phone:   # any filled value that looks like a phone number (BiteSpeed variable names are undocumented)
+        phone = next((str(val).strip() for val in flat.values() if _ok(val) and _re.fullmatch(r"\+?\d{10,13}", str(val).strip())), "")
     text_in = _pick("text", "message", "last_message", "user_message", "message_text", "customer_message", "input")
-    name = _pick("name", "customer_name", "first_name") or None
-    log.info("bot.turn keys=%s filled=%s phone_last4=%s text_len=%d", sorted(body)[:12],
-             [k for k, val in body.items() if isinstance(val, str) and val and "{{" not in val][:12], phone[-4:], len(text_in))
+    if not text_in:
+        text_in = next((str(val).strip() for k, val in flat.items() if _ok(val) and str(val).strip() != phone
+                        and not k.startswith(("name", "first", "last_name")) and "name" not in k.lower()), "")
+    name = _pick("name", "customer_name", "first_name", "firstName") or None
+    # Diagnostics without PII: per key -> empty / literal (unresolved {{x}}) / filled:<len>; header NAMES only.
+    shape = {k: ("empty" if str(val).strip() == "" else "literal" if "{{" in str(val) else f"filled:{len(str(val))}") for k, val in flat.items()}
+    log.info("bot.turn shape=%s headers=%s phone_last4=%s text_len=%d", shape,
+             sorted(h for h in request.headers.keys() if h.lower() not in ("authorization", "cookie")), phone[-4:], len(text_in))
     if not phone:
         return Response(status_code=400, content="no phone")
     if not phone.startswith("+"):
