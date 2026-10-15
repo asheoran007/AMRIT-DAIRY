@@ -169,13 +169,26 @@ async def bot_turn(token: str, request: Request) -> Response:
     if not settings.inbox_webhook_token or not _h.compare_digest(token, settings.inbox_webhook_token):
         return Response(status_code=401, content="bad token")
     body = _j.loads((await request.body()) or b"{}")
-    phone = str(body.get("phone") or "").strip()
+    def _pick(*keys):
+        """First key whose value is a real string (BiteSpeed leaves unresolved template variables as '{{x}}')."""
+        for k in keys:
+            val = str(body.get(k) or "").strip()
+            if val and "{{" not in val:
+                return val
+        return ""
+    phone = _pick("phone", "phone_number", "mobile", "customer_phone", "contact_phone", "whatsapp_number")
+    text_in = _pick("text", "message", "last_message", "user_message", "message_text", "customer_message", "input")
+    name = _pick("name", "customer_name", "first_name") or None
+    log.info("bot.turn keys=%s filled=%s phone_last4=%s text_len=%d", sorted(body)[:12],
+             [k for k, val in body.items() if isinstance(val, str) and val and "{{" not in val][:12], phone[-4:], len(text_in))
+    if not phone:
+        return Response(status_code=400, content="no phone")
     if not phone.startswith("+"):
         phone = "+" + phone.lstrip("0")
     from .conversation import deliver
     eng = build_engine()
     with tx(engine) as conn:
-        r = eng.turn(conn, phone, body.get("text") or "", body.get("button_id"), body.get("name"))
+        r = eng.turn(conn, phone, text_in, body.get("button_id"), name)
         # 16 Oct finding: the console webhook never carries incoming customer messages while the BiteSpeed bot owns the
         # conversation, so this flow-builder entry is the inbound path - and the adapter delivers the answer itself over
         # the official Messaging API under the same guards (kill switch / SENDER_MODE / allowlist). Fire-and-forget safe.

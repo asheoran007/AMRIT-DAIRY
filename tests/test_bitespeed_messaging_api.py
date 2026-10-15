@@ -142,3 +142,14 @@ def test_flow_builder_turn_delivers_over_messaging_api_under_guards(monkeypatch,
     assert j["delivery"]["status"] == "sent" and len(fake_post) == 1
     assert fake_post[0]["json"]["recipient"] == PHONE.lstrip("+") and fake_post[0]["json"]["text"]["body"] == j["reply_text"]
     assert c.post("/bot/turn/wrong", json={"phone": PHONE, "text": "hi"}).status_code == 401
+
+
+def test_flow_builder_turn_tolerates_variable_aliases_and_unresolved_templates(monkeypatch, fake_post):
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "dry_run")
+    c = TestClient(api.app)
+    body = {"phone": "{{phone}}", "phone_number": PHONE.lstrip("+"), "text": "{{message}}", "last_message": "hi", "name": "{{name}}"}
+    j = c.post("/bot/turn/t0k", json=body).json()
+    assert j["reply_text"] and j["delivery"]["status"] == "dry_run"
+    assert c.post("/bot/turn/t0k", json={"phone": "{{phone}}", "text": "hi"}).status_code == 400
