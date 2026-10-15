@@ -104,7 +104,14 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
     reply = render_plain(r.messages)
     note = f"🤖 handoff → {r.handoff_team or 'team'} (engine state {r.state})" if r.handoff else ""
 
-    # delivery decision
+    return deliver(conn, phone, conv_id, r, reply, note, chat, sender_mode, allowlist, kill_switch, source="console")
+
+
+def deliver(conn: Connection, phone: str, conv_id, r, reply: str, note: str, chat, sender_mode: str, allowlist: tuple[str, ...],
+            kill_switch: bool, source: str = "console") -> ReplyOutcome:
+    """Guard chain (kill switch -> SENDER_MODE -> allowlist -> channel present) and delivery of one engine turn; shared by the
+    console webhook path and the flow-builder /bot/turn path. Audited as bot.reply either way."""
+    from .engine.v2_map import stage_for
     if kill_switch:
         outcome, why = "dry_run", "global kill switch engaged"
     elif sender_mode == "live":
@@ -120,7 +127,6 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
         outcome, why = "dry_run", "no reply channel configured (BITESPEED_API_KEY+CHANNEL_ID or CHATWOOT_API_TOKEN)"
     if chat is not None and hasattr(chat, "for_phone"):
         chat = chat.for_phone(phone)       # Messaging API channel: replies address the customer's number, not a console conversation
-
     status = outcome
     if outcome == "send":
         try:
@@ -131,8 +137,7 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
             status = "sent"
         except Exception as exc:
             status, why = "failed", f"{type(exc).__name__}: {exc}"[:200]
-    from .engine.v2_map import stage_for
     audit(conn, "bot", "bot.reply", str(conv_id), {"phone_last4": phone[-4:], "state": r.state, "v2": stage_for(r), "status": status,
-                                                   "reason": why, "chars": len(reply), "handoff": r.handoff, "actions": r.actions})
-    log.info("bot.reply conv=%s state=%s status=%s reason=%s chars=%d handoff=%s", conv_id, r.state, status, why, len(reply), r.handoff)
+                                                   "reason": why, "chars": len(reply), "handoff": r.handoff, "actions": r.actions, "source": source})
+    log.info("bot.reply src=%s conv=%s state=%s status=%s reason=%s chars=%d handoff=%s", source, conv_id, r.state, status, why, len(reply), r.handoff)
     return ReplyOutcome(status, why, reply, r.state, r.handoff)

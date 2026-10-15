@@ -172,14 +172,21 @@ async def bot_turn(token: str, request: Request) -> Response:
     phone = str(body.get("phone") or "").strip()
     if not phone.startswith("+"):
         phone = "+" + phone.lstrip("0")
+    from .conversation import deliver
     eng = build_engine()
     with tx(engine) as conn:
         r = eng.turn(conn, phone, body.get("text") or "", body.get("button_id"), body.get("name"))
+        # 16 Oct finding: the console webhook never carries incoming customer messages while the BiteSpeed bot owns the
+        # conversation, so this flow-builder entry is the inbound path - and the adapter delivers the answer itself over
+        # the official Messaging API under the same guards (kill switch / SENDER_MODE / allowlist). Fire-and-forget safe.
+        out = deliver(conn, phone, body.get("conversation_id") or f"flow:{phone[-4:]}", r, render_plain(r.messages), "",
+                      _chatwoot(), settings.sender_mode, _allowlist(), settings.global_kill_switch, source="flow")
     return Response(status_code=200, media_type="application/json",
                     content=_j.dumps({"state": r.state, "messages": [m.as_dict() for m in r.messages], "actions": r.actions,
                                       "reply_text": render_plain(r.messages),            # for a single Text node: {{bot_reply}}
                                       "labels": [x.split(":", 1)[1] for x in r.actions if x.startswith("label:")],
-                                      "handoff": r.handoff, "handoff_team": r.handoff_team}, ensure_ascii=False))
+                                      "handoff": r.handoff, "handoff_team": r.handoff_team,
+                                      "delivery": {"status": out.status, "reason": out.reason}}, ensure_ascii=False))
 
 
 def _public_base(request: Request) -> str:

@@ -122,3 +122,23 @@ def test_health_reports_readiness_never_the_key(monkeypatch, fake_post):
     settings.bitespeed_client().send_text(PHONE, "hi")                       # first real (faked) send flips verified
     b = c.get("/health").json()["bitespeed_api"]
     assert b["status"] == "ok" and b["verified"] is True and b["last_send"]["sent"] == 1 and b["last_send"]["last_http"] == 200
+
+
+def test_flow_builder_turn_delivers_over_messaging_api_under_guards(monkeypatch, fake_post):
+    """/bot/turn (flow-builder API Call node) is the inbound path: the adapter answers over the Messaging API itself.
+    Kill switch / dry_run -> computed but not sent; live_test + allowlisted phone -> one API send; audited as source=flow."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "bitespeed_api_key", KEY)
+    monkeypatch.setattr(settings, "bitespeed_channel_id", "917700004877"); monkeypatch.setattr(settings, "test_phone_allowlist", PHONE)
+    c = TestClient(api.app)
+    monkeypatch.setattr(settings, "sender_mode", "live_test"); monkeypatch.setattr(settings, "global_kill_switch", True)
+    j = c.post("/bot/turn/t0k", json={"phone": PHONE.lstrip("+"), "text": "hi", "name": "Amit"}).json()
+    assert j["reply_text"] and j["delivery"]["status"] == "dry_run" and "kill switch" in j["delivery"]["reason"] and not fake_post
+    monkeypatch.setattr(settings, "global_kill_switch", False)
+    j = c.post("/bot/turn/t0k", json={"phone": "+919999999999", "text": "hi"}).json()
+    assert j["delivery"]["status"] == "dry_run" and "allowlist" in j["delivery"]["reason"] and not fake_post
+    j = c.post("/bot/turn/t0k", json={"phone": PHONE, "text": "hi"}).json()
+    assert j["delivery"]["status"] == "sent" and len(fake_post) == 1
+    assert fake_post[0]["json"]["recipient"] == PHONE.lstrip("+") and fake_post[0]["json"]["text"]["body"] == j["reply_text"]
+    assert c.post("/bot/turn/wrong", json={"phone": PHONE, "text": "hi"}).status_code == 401
