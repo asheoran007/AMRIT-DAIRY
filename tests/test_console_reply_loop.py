@@ -216,3 +216,40 @@ def test_incoming_messages_without_top_level_id_are_not_deduped_against_each_oth
     assert c.post("/webhooks/inbox/t0k", json=body("hi")).json()["status"] == "dry_run"
     assert c.post("/webhooks/inbox/t0k", json=body("hi 2")).json()["status"] == "dry_run"      # different message: accepted
     assert c.post("/webhooks/inbox/t0k", json=body("hi 2")).text == "duplicate"                 # exact redelivery: deduped
+
+
+def _conv_event(event="conversation_updated", content="products dikhao", mid=None, mtype=0, created=None, assignee=12724, phone=PHONE):
+    mid = mid or int(time.time() * 1000) % 10**9
+    created = created if created is not None else int(time.time())
+    return {"event": event, "id": 3652, "status": "open", "inbox_id": 1,
+            "meta": {"sender": {"id": 5, "name": "Amit", "phone_number": phone}, "assignee": {"id": assignee} if assignee else None},
+            "messages": [{"id": mid, "content": content, "message_type": mtype, "private": False, "created_at": created,
+                          "conversation_id": 3652, "sender": {"id": 5, "name": "Amit", "phone_number": phone}}],
+            "account": {"id": 3122}, "updated_at": time.time()}
+
+
+def test_incoming_message_is_derived_from_conversation_events_once(monkeypatch):
+    """Live finding 16 Oct: incoming customer text only arrives inside conversation_updated / _status_changed payloads.
+    The adapter derives one turn per incoming message id (many events per message -> one turn), ignores outgoing and
+    stale messages, and treats the 'BiteSpeed Bot' assignee as non-human."""
+    import amrit_adapter.api as api
+    from amrit_adapter.config import settings
+    monkeypatch.setattr(settings, "inbox_webhook_token", "t0k"); monkeypatch.setattr(settings, "sender_mode", "live_test")
+    monkeypatch.setattr(settings, "global_kill_switch", False); monkeypatch.setattr(settings, "test_phone_allowlist", PHONE)
+    monkeypatch.setattr(settings, "bitespeed_api_key", ""); monkeypatch.setattr(settings, "chatwoot_api_token", "cw")
+    sent = []
+    monkeypatch.setattr(cv.ChatwootClient, "send_text", lambda self, cid, content, private=False: sent.append((cid, content, private)) or {"id": 1})
+    c = TestClient(api.app)
+    ev = _conv_event()
+    c.post("/webhooks/inbox/t0k", json=ev)
+    assert len([s for s in sent if not s[2]]) == 1 and sent[0][0] == 3652
+    h = c.get("/health").json()["inbox"]["last_accepted"]
+    assert h["event"] == "message_derived" and h["result"].startswith("sent")
+    ev2 = dict(ev, event="conversation_status_changed", updated_at=time.time() + 1)     # same message, another event
+    c.post("/webhooks/inbox/t0k", json=ev2)
+    assert len([s for s in sent if not s[2]]) == 1                                        # no double reply
+    c.post("/webhooks/inbox/t0k", json=_conv_event(mtype=1))                              # outgoing -> ignored
+    c.post("/webhooks/inbox/t0k", json=_conv_event(created=int(time.time()) - 3600))      # stale -> ignored
+    assert len([s for s in sent if not s[2]]) == 1
+    c.post("/webhooks/inbox/t0k", json=_conv_event(assignee=999))                         # human agent -> skipped
+    assert len([s for s in sent if not s[2]]) == 1

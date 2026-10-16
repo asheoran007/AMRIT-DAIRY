@@ -344,6 +344,32 @@ async def inbox_webhook(token: str, request: Request) -> Response:
             summary["result"] = f"{out.status}: {out.reason}"; inbox_stats["last_accepted"] = summary
             return Response(status_code=200, media_type="application/json",
                             content=_j.dumps({"status": out.status, "reason": out.reason, "state": out.state}))
+        if ev.event_type in ("bitespeed_inbox.conversation_updated", "bitespeed_inbox.conversation_status_changed",
+                             "bitespeed_inbox.conversation_created"):
+            from .conversation import incoming_from_conversation_event
+            from .envelope import InternalEvent as _IE
+            p = ev.payload
+            log.info("inbox %s conv=%s shape msgs=%d types=%s has_last=%s sender_last4=%s", ev.event_type.split(".", 1)[1], conv,
+                     len(p.get("messages") or []), [m.get("message_type") for m in (p.get("messages") or []) if isinstance(m, dict)][:5],
+                     isinstance(p.get("last_non_activity_message"), dict),
+                     str((((p.get("meta") or {}).get("sender")) or {}).get("phone_number") or "")[-4:])
+            results = []
+            for msg in incoming_from_conversation_event(p):
+                dedupe = _IE(brand_id=ev.brand_id, source="bitespeed_inbox_msg", source_event_id=f"msg:{msg['id']}",
+                             source_object_id=str(msg["id"]), event_type="bitespeed_inbox.message_derived",
+                             occurred_at=str(msg.get("created_at") or ""), auth_level=ev.auth_level, payload={"conversation_id": conv})
+                if persist_event(conn, dedupe).duplicate:
+                    continue
+                try:
+                    out = handle_inbound(conn, msg, build_engine, _chatwoot(), settings.sender_mode, _allowlist(),
+                                         settings.global_kill_switch,
+                                         tuple(k.strip() for k in settings.flow_keywords_yield.split(",") if k.strip()))
+                    results.append(f"{out.status}: {out.reason}")
+                except Exception:
+                    log.exception("derived inbound handling failed (event stays persisted)")
+                    results.append("error-logged")
+            if results:
+                summary["event"] = "message_derived"; summary["result"] = "; ".join(results)
         inbox_stats["last_accepted"] = summary
     return Response(status_code=200)
 

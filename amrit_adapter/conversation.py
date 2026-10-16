@@ -62,6 +62,44 @@ def _phone(body: dict[str, Any]) -> str:
     return p
 
 
+BOT_ASSIGNEE_IDS: set[str] = {"12724"}   # "BiteSpeed Bot" agent (seen 16 Oct): a bot-owned conversation is not a human takeover
+
+
+def incoming_from_conversation_event(body: dict[str, Any], max_age_s: int = 900, now: float | None = None) -> list[dict[str, Any]]:
+    """BiteSpeed's console webhook never delivers incoming customer messages as message_created (live finding 16 Oct), but
+    every incoming message reopens/updates the conversation and conversation_updated / conversation_status_changed carry
+    the conversation with its latest messages[] and meta.sender. Rebuild a message_created body for each recent incoming,
+    non-private message so the normal guarded handle_inbound path runs. Old messages (> max_age_s) are ignored so an agent
+    resolving an old chat never triggers a stale reply."""
+    import time as _t
+    now = now or _t.time()
+    if body.get("event") not in ("conversation_updated", "conversation_status_changed", "conversation_created"):
+        return []
+    conv = {k: body.get(k) for k in ("id", "status", "assignee_id", "meta", "inbox_id") if k in body}
+    conv["id"] = body.get("id") or (body.get("conversation") or {}).get("id")
+    msgs = body.get("messages") or []
+    if isinstance(body.get("last_non_activity_message"), dict):
+        msgs = list(msgs) + [body["last_non_activity_message"]]
+    out, seen = [], set()
+    for m in msgs:
+        if not isinstance(m, dict) or m.get("id") in seen:
+            continue
+        seen.add(m.get("id"))
+        if m.get("message_type") not in (0, "0", "incoming") or m.get("private"):
+            continue
+        created = m.get("created_at") or 0
+        try:
+            created = float(created)
+        except (TypeError, ValueError):
+            created = 0
+        if not m.get("id") or not str(m.get("content") or "").strip() or (created and now - created > max_age_s):
+            continue
+        out.append({"event": "message_created", "id": m["id"], "content": m.get("content"), "message_type": "incoming",
+                    "private": False, "created_at": m.get("created_at"), "sender": m.get("sender") or (conv.get("meta") or {}).get("sender") or {},
+                    "conversation": conv, "account": body.get("account") or {}, "_derived_from": body.get("event")})
+    return out
+
+
 def _norm_phone(p: str) -> str:
     return "".join(ch for ch in p if ch.isdigit())
 
@@ -89,7 +127,7 @@ def handle_inbound(conn: Connection, body: dict[str, Any], build_engine, chat: C
     if not conv_id or not phone:
         return ReplyOutcome("skipped", "no conversation id / sender phone")
     assignee = conv.get("assignee_id") or ((conv.get("meta") or {}).get("assignee") or {}).get("id")
-    if assignee:
+    if assignee and str(assignee) not in BOT_ASSIGNEE_IDS:
         return ReplyOutcome("skipped", "conversation owned by a human agent")
     text_in = str(body.get("content") or "").strip()
     name = (body.get("sender") or {}).get("name")
