@@ -124,7 +124,8 @@ def handle(conn: Connection, ev: InternalEvent, first_delay_min: int = 45, shopi
             if res.get("status") == "ordered":
                 outbox.enqueue(conn, b, f"{key}:engine_order_confirm", "send_message", "service",
                                {"purpose": "order_confirm", "channel_type": "whatsapp", "message": res["message"], "phone": res["phone"]}, now_iso(),
-                               conn.execute(text("SELECT contact_id FROM order_ref WHERE order_key=:k"), {"k": key}).fetchone()[0], key)
+                               # the WhatsApp chat contact that ordered (holds the service consent), not the Shopify-side contact
+                               res.get("contact_id") or conn.execute(text("SELECT contact_id FROM order_ref WHERE order_key=:k"), {"k": key}).fetchone()[0], key)
         return actions
 
     if ev.event_type == "shopify.orders.cancelled":

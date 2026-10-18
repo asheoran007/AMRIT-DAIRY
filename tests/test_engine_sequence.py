@@ -345,3 +345,19 @@ def test_parse_address_city_state_pin_and_mobile():
     assert a.city == "Sonipat" and a.province == "Haryana" and a.phone == PHONE and "131001" not in a.address1
     a = parse_address("Suresh, 45 MG Road, Indiranagar, Bengaluru 560038 Karnataka", PHONE)
     assert a.city == "Bengaluru" and a.province == "Karnataka"
+
+
+def test_paid_order_confirmation_is_deliverable_without_manual_consent(engine, eng):
+    """Live 19 Oct (#1170): the engine said 'ordered' but the outbox cancelled the confirmation ('no service consent on
+    whatsapp'). The customer ordered in this chat, so the payment link step records service consent for the chat contact
+    and the confirmation job targets that contact -> the outbox consent check passes. Marketing consent is NOT granted."""
+    from amrit_adapter.consent import has_consent
+    e, shop = eng
+    with engine.begin() as c:
+        e.turn(c, PHONE, "ghee"); e.turn(c, PHONE, button_id="pack:1 L"); e.turn(c, PHONE, button_id="qty:1"); e.turn(c, PHONE, "haan")
+        e.turn(c, PHONE, button_id="confirm_yes")
+        contact = c.execute(text("SELECT contact_id FROM conversation_session WHERE phone_e164=:p"), {"p": PHONE}).scalar()
+        assert has_consent(c, BRAND, contact, "whatsapp", "service") and not has_consent(c, BRAND, contact, "whatsapp", "marketing")
+        gid = next(iter(shop.drafts)); order = shop.complete_checkout(gid, 2201)
+        res = on_order_paid(c, order, shop)
+        assert res["status"] == "ordered" and res["contact_id"] == contact and "ORDER CONFIRMED" in res["message"]["text"]

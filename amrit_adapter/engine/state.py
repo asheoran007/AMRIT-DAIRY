@@ -78,6 +78,17 @@ def box(title: str) -> str:
     return f"╭───────────────╮\n│ {title}\n╰───────────────╯"
 
 
+def _grant_service(conn: Connection, brand_id: str, contact_id: str | None, quote_ref: str | None) -> None:
+    """The customer asked for this order on WhatsApp and received the payment link there: service messages about THIS
+    order (payment confirmation, dispatch) are expected. Recorded once per quote in the consent ledger (never marketing).
+    A STOP/stop_all from the customer still wins (has_consent checks stop_all first)."""
+    if not contact_id:
+        return
+    from ..consent import has_consent, record_consent
+    if not has_consent(conn, brand_id, contact_id, "whatsapp", "service"):
+        record_consent(conn, brand_id, contact_id, "whatsapp", "service", "granted", f"quote:{quote_ref or ''}")
+
+
 class Engine:
     def __init__(self, catalog: Catalog, shopify: ShopifyClient, brand_id: str = "amrit_dairy",
                  test_allowlist: tuple[str, ...] = (), test_payment_minor: int = 1000) -> None:
@@ -341,6 +352,7 @@ class Engine:
                      {"d": d.id, "s": s["session_id"], "q": s["quote_ref"], "n": now_iso()})
         s["draft_order_id"] = d.id; s["invoice_url"] = d.invoice_url; s["state"] = "AWAITING_PAYMENT"; _save(conn, s)
         leads.upsert_lead(conn, self.brand, s["contact_id"], s["product_key"], "payment_pending")
+        _grant_service(conn, self.brand, s.get("contact_id"), s.get("quote_ref"))
         return TurnResult("AWAITING_PAYMENT", [Msg("text", box("💳 *PAYMENT*") + f"\nआपका ऑर्डर लगभग तैयार है जी 🙏\n\n💰 कुल राशि: *{_inr(d.total_minor)}*\n🔗 {d.invoice_url}\n\n"
                                                            "📱 UPI / कार्ड / नेट-बैंकिंग — सब चलता है\n⏳ लिंक 48 घंटे मान्य\n"
                                                            "✅ भुगतान होते ही ऑर्डर नंबर अपने-आप यहीं आएगा — screenshot की ज़रूरत नहीं\n\n"
@@ -369,6 +381,7 @@ class Engine:
                      {"d": d.id, "s": s["session_id"], "q": s["quote_ref"], "n": now_iso()})
         s["draft_order_id"] = d.id; s["invoice_url"] = d.invoice_url; s["state"] = "AWAITING_PAYMENT"; _save(conn, s)
         audit(conn, "engine", "testpay.created", s["session_id"], {"draft": d.id, "amount_minor": d.total_minor})
+        _grant_service(conn, self.brand, s.get("contact_id"), s.get("quote_ref"))
         return TurnResult("AWAITING_PAYMENT", [Msg("text", box(f"🧪 *GATEWAY TEST ₹{self.test_payment_minor // 100}*") + f"\n🔗 {d.invoice_url}\n\n"
                                                            "📦 कोई सामान नहीं भेजा जाएगा (ऑर्डर पर shipping hold)\n✅ भुगतान होते ही पुष्टि अपने-आप यहीं आएगी —\nयही असली gateway + webhook test है।")], actions + [f"draft:{d.id}", "testpay:created"])
 
@@ -548,4 +561,5 @@ def on_order_paid(conn: Connection, shopify_order: dict[str, Any], shopify: Shop
     msg = Msg("text", box("✅ *ORDER CONFIRMED*" if not test else "✅ *TEST PAYMENT VERIFIED*") +
               f"\nधन्यवाद जी! 🙏 भुगतान मिल गया।\n\n🧾 ऑर्डर: *{verified['name']}*\n💰 राशि: *{_inr(amt)}*\n" +
               ("📦 Dispatch होते ही tracking इसी WhatsApp पर आएगी।\n\n" if not test else "🧪 Gateway + webhook दोनों सही — इस टेस्ट ऑर्डर पर shipping hold है।\n\n") + FOOTER)
-    return {"status": "ordered", "order_id": verified["id"], "order_name": verified["name"], "message": msg.as_dict(), "phone": s["phone_e164"]}
+    return {"status": "ordered", "order_id": verified["id"], "order_name": verified["name"], "message": msg.as_dict(), "phone": s["phone_e164"],
+            "contact_id": s.get("contact_id")}
