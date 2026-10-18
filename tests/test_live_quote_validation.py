@@ -19,7 +19,7 @@ def test_snapshot_price_is_replaced_by_live_price_before_quoting(engine, tmp_pat
     e = Engine(verified_catalog(tmp_path), shop, BRAND)
     with engine.begin() as c:
         r = e.turn(c, PHONE, "ghee")
-        assert "₹17,500" in r.messages[2].rows[1][1] and e.cat.get("ghee").variants[1].price_minor == 1800000   # pack list refreshed live (₹18,000 − ₹500)
+        assert "₹17,500" in r.messages[-1].rows[1][1] and e.cat.get("ghee").variants[1].price_minor == 1800000   # pack list refreshed live (₹18,000 − ₹500)
         r = e.turn(c, PHONE, button_id="pack:5 Ltr"); e.turn(c, PHONE, "1"); r = e.turn(c, PHONE, button_id="addr_yes")
         q = json.loads(c.execute(__import__("sqlalchemy").text("SELECT quote_json FROM conversation_session WHERE phone_e164=:p"), {"p": PHONE}).scalar())
         assert q["source"] == "shopify_calculate" and q["unit_minor"] == 1800000 and q["total_minor"] == 1750000 and q["taxes_included"] is True
@@ -57,7 +57,7 @@ def test_out_of_stock_or_unavailable_variant_is_not_quoted(engine, tmp_path):
     e2 = Engine(verified_catalog(tmp_path), shop2, BRAND)
     with engine.begin() as c:
         r = e2.turn(c, "+918814869007", "ghee")
-        assert "5 लीटर" in r.messages[2].rows[1][1]
+        assert "5 लीटर" in r.messages[-1].rows[1][1]
         r = e2.turn(c, PHONE, button_id="pack:5 Ltr")
         assert r.state == "PACK" and "स्टॉक में नहीं" in r.messages[0].text   # refresh marked it unavailable before any quote
 

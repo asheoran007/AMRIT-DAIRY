@@ -57,9 +57,10 @@ def test_01_02_03_ghee_enquiry_creates_lead_sends_video_and_packs(engine, eng):
         tags = leads.tags_for(c, lead_id)
         assert {"LEAD_NEW", "INTEREST_GHEE", "CHANNEL_WHATSAPP", "STAGE_PRODUCT_SELECTED"} <= tags
         types = [m.type for m in r.messages]
-        assert types == ["video", "text", "list"]                                   # real approved video first
+        assert types == ["video", "list"]                                           # real approved video first, then ONE card (story + packs)
         assert r.messages[0].media_url.endswith("ghee-approved.mp4")
-        assert [row[0] for row in r.messages[2].rows] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr"]
+        assert [row[0] for row in r.messages[1].rows] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr"]
+        assert "AMRIT" not in r.messages[1].text and "╭" in r.messages[1].text      # house-style boxed header
         r = e.turn(c, PHONE, button_id="pack:5 L")
         assert r.state == "QTY" and "₹17,000" in r.messages[0].text and "MRP ₹17,500" in r.messages[0].text   # owner-approved ₹500 WhatsApp offer on live ₹17,500
         r = e.turn(c, PHONE, "2")
@@ -70,8 +71,9 @@ def test_04_saved_address_yes_branch_and_06_quote(engine, eng):
     e, shop = eng
     with engine.begin() as c:
         e.turn(c, PHONE, "ghee"); e.turn(c, PHONE, button_id="pack:1 L"); r = e.turn(c, PHONE, button_id="qty:2")
-        assert "Aapka pichhla delivery address hamare paas saved hai" in r.messages[0].text
-        assert [b[1] for b in r.messages[0].buttons] == ["Haan, isi address par", "Address change karna hai", "Baad mein"]
+        assert "आपका पिछला पता हमारे पास सुरक्षित है" in r.messages[0].text
+        assert [b[1] for b in r.messages[0].buttons] == ["✅ हाँ, यही पता", "✏️ नया पता", "⏳ बाद में"]
+        assert all(len(b[1]) <= 20 for b in r.messages[0].buttons)                  # WhatsApp reply-button title limit
         r = e.turn(c, PHONE, "haan")
         assert r.state == "QUOTE"
         q = json.loads(c.execute(text("SELECT quote_json FROM conversation_session WHERE phone_e164=:p"), {"p": PHONE}).scalar())
@@ -146,7 +148,7 @@ def test_12_honey_uses_same_engine(engine, eng):
     with engine.begin() as c:
         r = e.turn(c, PHONE, "shahad chahiye")
         assert r.state == "PACK" and r.messages[0].media_url.endswith("honey-approved.mp4")
-        assert [row[0] for row in r.messages[2].rows] == ["pack:250 gm", "pack:500 gm", "pack:1 Kg"]
+        assert [row[0] for row in r.messages[1].rows] == ["pack:250 gm", "pack:500 gm", "pack:1 Kg"]
         r = e.turn(c, PHONE, "250 gm")
         assert r.state == "QTY"
         lead = c.execute(text("SELECT lead_type FROM lead WHERE contact_id=(SELECT contact_id FROM conversation_session WHERE phone_e164=:p) ORDER BY created_at"), {"p": PHONE}).fetchall()
@@ -178,10 +180,10 @@ def test_live_catalog_has_no_video_so_engine_sends_image_fallback_only_when_appr
     e = Engine(Catalog.load(), FakeShopifyClient(), BRAND)
     with engine.begin() as c:
         r = e.turn(c, PHONE, "ghee")
-        assert r.state == "PACK" and [m.type for m in r.messages] == ["text", "text", "list"]
-        assert r.messages[0].text.endswith("https://youtu.be/BAnglrsKYuw") and r.messages[0].media_url is None   # owner's brand video as a link
-        assert "₹3,500" in r.messages[2].rows[0][1] and "₹17,000" in r.messages[2].rows[1][1]   # net of the approved ₹500 offer
-        assert "MRP ₹17,500" in r.messages[2].rows[1][2] and "₹32,000" in r.messages[2].rows[2][1]
+        assert r.state == "PACK" and [m.type for m in r.messages] == ["list"]       # quick: one message
+        assert "https://youtu.be/BAnglrsKYuw" in r.messages[0].text and r.messages[0].media_url is None   # owner's brand video as a link
+        assert "₹3,500" in r.messages[0].rows[0][1] and "₹17,000" in r.messages[0].rows[1][1]   # net of the approved ₹500 offer
+        assert "MRP ₹17,500" in r.messages[0].rows[1][2] and "₹32,000" in r.messages[0].rows[2][1]
 
 
 def test_shopify_orders_paid_webhook_end_to_end(engine, eng):
@@ -333,3 +335,13 @@ def test_api_failure_is_recovered_with_retry_message_and_unchanged_state(engine,
         shop.create_draft_order = orig
         r = e.turn(c, PHONE, button_id="confirm_yes")     # provider back: the journey continues from the same state
         assert r.state == "AWAITING_PAYMENT" and len(shop.drafts) == 1
+
+
+def test_parse_address_city_state_pin_and_mobile():
+    from amrit_adapter.engine.state import parse_address
+    a = parse_address("Ramesh Kumar, H.No 12 Gali 3, Sector 15, Sonipat, Haryana 131001, 9876543210", PHONE)
+    assert (a.name, a.address1, a.city, a.province, a.zip, a.phone) == ("Ramesh Kumar", "H.No 12 Gali 3, Sector 15", "Sonipat", "Haryana", "131001", "+919876543210")
+    a = parse_address("Amit Kumar\nVillage Rajbhaya Garhi Brahmanan\nNear Amrit Neer Mahal\nSonipat\nHaryana - 131001", PHONE)
+    assert a.city == "Sonipat" and a.province == "Haryana" and a.phone == PHONE and "131001" not in a.address1
+    a = parse_address("Suresh, 45 MG Road, Indiranagar, Bengaluru 560038 Karnataka", PHONE)
+    assert a.city == "Bengaluru" and a.province == "Karnataka"

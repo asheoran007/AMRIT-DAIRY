@@ -23,15 +23,15 @@ services:
       - key: ADAPTER_EMBED_WORKER
         value: "true"
       - key: RELEASE               # bump per release: the Blueprint sync applies the env change and redeploys the latest commit
-        value: "2026-10-16.7"
+        value: "2026-10-19.1"
       - key: ADAPTER_BRAND_ID
         value: amrit_dairy
       - key: SHOPIFY_SHOP_DOMAIN
         value: kmaz1y-dq.myshopify.com
       - key: ADAPTER_PUBLIC_URL
         value: https://adapter.amritdairy.in
-      - key: SENDER_MODE
-        value: dry_run            # dry_run | live_test (TEST_PHONE_ALLOWLIST only) | live
+      - key: SENDER_MODE          # dry_run | live_test (TEST_PHONE_ALLOWLIST only) | live
+        sync: false               # owned by the dashboard (owner switches test windows there); code default = dry_run
       - key: CHATWOOT_API_TOKEN   # support console (chat.bitespeed.co) agent access token ONLY; set in dashboard. Never the Messaging API key.
         sync: false
       - key: BITESPEED_API_KEY    # official shop-scoped BiteSpeed Messaging API key (X-API-Key); set in dashboard only
@@ -41,7 +41,7 @@ services:
       - key: FLOW_KEYWORDS_YIELD   # exact trigger words of live flows AD-01 (ghee) / AD-02 (honey) / AD-08 (milk), read 13 Oct; clear at go-live
         value: "ghee,घी,ghi,bilona,बिलोना,desi ghee,cow ghee,golden ghee,honey,शहद,हनी,shehad,natural honey,organic honey,raw honey,honey price,buy honey,milk,दूध,dudh,cow milk,desi cow milk,a2 milk,milk price"
       - key: GLOBAL_KILL_SWITCH
-        value: "true"
+        sync: false               # owned by the dashboard; code default = true (ON) when unset
       - key: TEST_PHONE_ALLOWLIST
         value: "+918814869007"
       - key: SHOPIFY_CLIENT_ID

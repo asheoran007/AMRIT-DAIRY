@@ -67,10 +67,14 @@ def test_reply_channel_binds_phone_and_guards_apply(engine, build, fake_post):
         r = cv.handle_inbound(c, inbound("ghee", phone="+919999999999", mid=302), build, chan, "live_test", (PHONE,), False)
         assert r.status == "dry_run" and "not on allowlist" in r.reason and not fake_post
         r = cv.handle_inbound(c, inbound("ghee", mid=303), build, chan, "live_test", (PHONE,), False)
-        assert r.status == "sent" and len(fake_post) == 1
-        j = fake_post[0]["json"]
-        assert j["recipient"] == PHONE.lstrip("+") and j["messageType"] == "text" and j["text"]["body"] == r.reply_text
-        assert j["sourceContext"]["thirdPartyMessageId"].startswith("conv777-")
+        assert r.status == "sent" and len(fake_post) == 2                       # native video + ONE interactive pack list
+        v, lst = fake_post[0]["json"], fake_post[1]["json"]
+        assert v["messageType"] == "video" and v["media"]["link"].endswith("ghee-approved.mp4")
+        assert lst["recipient"] == PHONE.lstrip("+") and lst["messageType"] == "interactive" and lst["interactive"]["type"] == "list"
+        assert [row["id"] for row in lst["interactive"]["action"]["sections"][0]["rows"]] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr"]
+        assert all(len(row["title"]) <= 24 for row in lst["interactive"]["action"]["sections"][0]["rows"])
+        assert lst["interactive"]["footer"]["text"] == "हर घर अमृत 🌿"
+        assert lst["sourceContext"]["thirdPartyMessageId"].startswith("conv777-")
         r = cv.handle_inbound(c, inbound("ghee", phone="+910000000000", mid=304), build, chan, "live", (), False)   # provider 403 -> failed, audited
         assert r.status == "failed" and "HTTP 403" in r.reason
         rows = c.execute(text("SELECT detail_json FROM audit_log WHERE action='bot.reply' ORDER BY rowid DESC LIMIT 1")).fetchall()
@@ -139,8 +143,9 @@ def test_flow_builder_turn_delivers_over_messaging_api_under_guards(monkeypatch,
     j = c.post("/bot/turn/t0k", json={"phone": "+919999999999", "text": "hi"}).json()
     assert j["delivery"]["status"] == "dry_run" and "allowlist" in j["delivery"]["reason"] and not fake_post
     j = c.post("/bot/turn/t0k", json={"phone": PHONE, "text": "hi"}).json()
-    assert j["delivery"]["status"] == "sent" and len(fake_post) == 1
-    assert fake_post[0]["json"]["recipient"] == PHONE.lstrip("+") and fake_post[0]["json"]["text"]["body"] == j["reply_text"]
+    assert j["delivery"]["status"] == "sent" and len(fake_post) == 1          # welcome menu as ONE native list
+    body = fake_post[0]["json"]
+    assert body["recipient"] == PHONE.lstrip("+") and body["interactive"]["type"] == "list" and "AMRIT DAIRY" in body["interactive"]["body"]["text"]
     assert c.post("/bot/turn/wrong", json={"phone": PHONE, "text": "hi"}).status_code == 401
 
 
@@ -163,3 +168,33 @@ def test_flow_builder_turn_finds_phone_and_text_under_unknown_variable_names(mon
     body = {"a": "{{phone}}", "contact": {"phoneNumber": PHONE.lstrip("+"), "firstName": "Amit"}, "msg": "products dikhao", "x": ""}
     j = c.post("/bot/turn/t0k", json=body).json()
     assert j["reply_text"] and j["delivery"]["status"] == "dry_run"
+
+
+
+def test_rejected_interactive_falls_back_to_numbered_text(monkeypatch, fake_post):
+    calls = []
+    def _post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        if json.get("messageType") == "interactive":
+            return R(400, {"message": "unsupported interactive"})
+        return R(200, {"message": "Message queued successfully"})
+    monkeypatch.setattr(bs.httpx, "post", _post)
+    from amrit_adapter.engine.state import Msg
+    chan = bs.BitespeedReplyChannel(bs.BitespeedMessagingClient(KEY, "917700004877", BASE), PHONE)
+    chan.send_messages(1, [Msg("buttons", "कितने पैक?", [("qty:1", "1 पैक"), ("qty:2", "2 पैक")])])
+    assert [c["messageType"] for c in calls] == ["interactive", "text"] and "1️⃣ 1 पैक" in calls[1]["text"]["body"]
+
+
+def test_tapped_button_title_maps_back_to_option(engine):
+    from amrit_adapter.engine.state import Engine
+    from amrit_adapter.engine.catalog import Catalog
+    from amrit_adapter.engine.shopify_client import FakeShopifyClient
+    from tests.conftest import BRAND
+    e = Engine(Catalog.load(), FakeShopifyClient(), BRAND)
+    with engine.begin() as c:
+        r = e.turn(c, PHONE, "ghee")
+        title = r.messages[-1].rows[1][1]                    # "5 लीटर — ₹17,000" as WhatsApp shows the tapped row
+        r = e.turn(c, PHONE, title)
+        assert r.state == "QTY"
+        r = e.turn(c, PHONE, "2 पैक")                        # tapped reply button
+        assert r.state in ("ADDRESS_CONFIRM", "ADDRESS_COLLECT")

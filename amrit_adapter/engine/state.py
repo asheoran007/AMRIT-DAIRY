@@ -68,6 +68,16 @@ def _inr(minor: int) -> str:
     return f"₹{minor // 100:,}"
 
 
+# ---------------- house style (owner's canned messages: boxed header, 🙏, short lines, "हर घर अमृत 🌿") ----------------
+FOOTER = "हर घर अमृत 🌿"
+ICON = {"ghee": "🧈", "honey": "🍯", "milk": "🥛", "cow": "🐄"}
+SHORT = {"ghee": "देसी गाय बिलोना घी", "honey": "फ़ॉरेस्ट शहद", "milk": "देसी गाय दूध", "cow": "गाय ख़रीद / बिक्री"}   # list-row titles ≤24
+
+
+def box(title: str) -> str:
+    return f"╭───────────────╮\n│ {title}\n╰───────────────╯"
+
+
 class Engine:
     def __init__(self, catalog: Catalog, shopify: ShopifyClient, brand_id: str = "amrit_dairy",
                  test_allowlist: tuple[str, ...] = (), test_payment_minor: int = 1000) -> None:
@@ -76,7 +86,7 @@ class Engine:
         self.price_ttl_s = 600   # pack-list prices re-read from Shopify at most every 10 min; the final quote is always live
 
     # ---------------- public ----------------
-    RETRY_MSG = "थोड़ी तकनीकी दिक्कत आई 🙏 कृपया 1 मिनट बाद फिर से लिखें — आपकी पसंद याद रखी गई है।"
+    RETRY_MSG = "🙏 माफ़ कीजिए जी, थोड़ी तकनीकी दिक्कत आ गई।\n⏳ 1 मिनट बाद फिर से लिखें — आपकी पसंद हमने याद रखी है।"
 
     def turn(self, conn: Connection, phone: str, text_in: str = "", button_id: str | None = None, display_name: str | None = None) -> TurnResult:
         try:
@@ -88,9 +98,11 @@ class Engine:
                                  {"b": self.brand, "p": phone}).scalar() or "NEW"
             audit(conn, "engine", "turn.error", phone[-4:], {"state": state, "error": type(exc).__name__})
             return TurnResult(state, [Msg("text", self.RETRY_MSG)], [f"error:{type(exc).__name__}"])
-        opts = [i for m in r.messages for i, _ in m.buttons] + [i for m in r.messages for i, _, _ in m.rows]
+        pairs = [(i, t) for m in r.messages for i, t in m.buttons] + [(i, t) for m in r.messages for i, t, _ in m.rows]
+        # ids in display order (numbered replies) + titles (a tapped WhatsApp button/list row arrives as its title text)
+        opts = {"ids": [i for i, _ in pairs], "titles": [t for _, t in pairs]} if pairs else None
         conn.execute(text("UPDATE conversation_session SET last_options_json=:o WHERE brand_id=:b AND phone_e164=:p"),
-                     {"o": json.dumps(opts) if opts else None, "b": self.brand, "p": phone})
+                     {"o": json.dumps(opts, ensure_ascii=False) if opts else None, "b": self.brand, "p": phone})
         return r
 
     def _turn(self, conn: Connection, phone: str, text_in: str = "", button_id: str | None = None, display_name: str | None = None) -> TurnResult:
@@ -106,11 +118,11 @@ class Engine:
         if (text_in or "").strip().upper() == "TESTPAY":        # gateway round-trip test, allowlisted numbers only, never a product
             return self._testpay(conn, s, actions)
         if it.kind == "stop":
-            r = TurnResult("NEW", [Msg("text", "ठीक है जी 🙏 हम आपको प्रचार संदेश नहीं भेजेंगे — सिर्फ़ आपके ऑर्डर से जुड़ी ज़रूरी जानकारी मिलेगी।")], ["consent:withdrawn", "label:opt_out"])
+            r = TurnResult("NEW", [Msg("text", "ठीक है जी 🙏\n🔕 अब आपको कोई प्रचार संदेश नहीं भेजेंगे।\n📦 सिर्फ़ आपके ऑर्डर से जुड़ी ज़रूरी जानकारी मिलेगी।\n\n" + FOOTER)], ["consent:withdrawn", "label:opt_out"])
             s["state"] = "NEW"; _save(conn, s); return r
         if it.kind == "human":
             s["state"] = "HANDOFF"; _save(conn, s)
-            return TurnResult("HANDOFF", [Msg("text", "ठीक है जी 🙏 आपकी बात हमारी टीम तक पहुँचा रही हूँ — थोड़ी देर में एक व्यक्ति यहीं जवाब देगा।")], ["label:human_owner", "assign:Sales"], True, "Sales")
+            return TurnResult("HANDOFF", [Msg("text", box("👤 *TEAM SUPPORT*") + "\nठीक है जी 🙏\nआपकी बात हमारी टीम तक पहुँचा दी है —\n⏳ थोड़ी देर में एक व्यक्ति यहीं जवाब देगा।\n\n📞 जल्दी हो तो कॉल करें: 77000 04877")], ["label:human_owner", "assign:Sales"], True, "Sales")
         if s["state"] == "HANDOFF":
             return TurnResult("HANDOFF", [], ["noop:human_owns"], True)
         if it.kind == "track":
@@ -128,7 +140,7 @@ class Engine:
             return self._pack(conn, s, it.pack_label, actions)
         if st in ("PACK", "QTY") and it.kind == "quantity":
             if st == "PACK":
-                return TurnResult(st, [Msg("text", "पहले पैक साइज़ चुन लीजिए 👇"), self._pack_msg(self.cat.get(s["product_key"]))], actions)
+                return TurnResult(st, [Msg("text", "👆 पहले पैक साइज़ चुन लीजिए जी"), self._pack_msg(self.cat.get(s["product_key"]))], actions)
             return self._qty(conn, s, it.quantity, actions)
         if st == "ADDRESS_CONFIRM":
             if it.kind == "yes":
@@ -138,7 +150,7 @@ class Engine:
                 return TurnResult("ADDRESS_COLLECT", [self._address_prompt()], actions)
             if it.kind == "later":
                 s["state"] = "PRODUCT"; _save(conn, s)
-                return TurnResult("PRODUCT", [Msg("text", "ठीक है जी 🙏 जब भी तैयार हों, बस *ORDER* लिखें — आपकी पसंद याद रखी है।")], actions)
+                return TurnResult("PRODUCT", [Msg("text", "ठीक है जी 🙏\n✨ आपकी पसंद हमने याद रख ली है।\nजब भी तैयार हों, बस *ORDER* लिखिए।\n\n" + FOOTER)], actions)
         if st == "ADDRESS_COLLECT":
             return self._address_collect(conn, s, text_in, actions)
         if st == "QUOTE":
@@ -150,18 +162,22 @@ class Engine:
         if st == "AWAITING_PAYMENT":
             if it.kind == "yes":
                 return self._create_payment(conn, s, actions)
-            return TurnResult(st, [Msg("buttons", f"आपका भुगतान लिंक अभी मान्य है 👇\n{s['invoice_url']}\nभुगतान पूरा होते ही आपको ऑर्डर नंबर अपने-आप मिल जाएगा।",
-                                        [("human", "व्यक्ति से बात करें"), ("addr_change", "पता बदलना है")])], actions)
+            return TurnResult(st, [Msg("buttons", box("💳 *PAYMENT LINK*") + f"\nआपका भुगतान लिंक अभी भी मान्य है 👇\n🔗 {s['invoice_url']}\n\n✅ भुगतान होते ही ऑर्डर नंबर अपने-आप यहीं आ जाएगा।",
+                                        [("human", "👤 टीम से बात"), ("addr_change", "📍 पता बदलना है")])], actions)
         # unknown in any other state: re-prompt current step
         _save(conn, s)
-        return TurnResult(st, [Msg("text", "माफ़ कीजिए, समझ नहीं पाई 🙏 नीचे से चुनिए या *व्यक्ति* लिखें।"), self._menu()], actions)
+        return TurnResult(st, [Msg("text", "🙏 माफ़ कीजिए जी, समझ नहीं पाई।\nनीचे से चुनिए 👇 या *व्यक्ति* लिखिए — टीम जवाब देगी।"), self._menu()], actions)
 
     # ---------------- steps ----------------
     def _menu(self) -> Msg:
-        rows = [(f"product:{p.key}", (p.title_hi if p.sellable else p.title_hi)[:24], ("ताज़ा कीमत और पैक" if p.sellable else "जानकारी / टीम संपर्क")[:72])
+        rows = [(f"product:{p.key}", f"{ICON.get(p.key, '🌿')} {SHORT.get(p.key, p.title_hi)}"[:24],
+                 ("ताज़ा कीमत • पैक चुनें • तुरंत ऑर्डर" if p.sellable else "जानकारी • टीम से बात")[:72])
                 for p in self.cat.products.values() if p.approved_for_sale or p.delivery_class == "registry"]
-        rows += [("track", "📦 ऑर्डर ट्रैक करें", "ऑर्डर नंबर से स्टेटस"), ("human", "👤 व्यक्ति से बात करें", "हमारी टीम जवाब देगी")]
-        return Msg("list", "🙏 राम राम जी! Amrit Dairy में आपका स्वागत है।\nआज आपको क्या चाहिए? 👇", rows=rows[:10])
+        rows += [("track", "📦 ऑर्डर ट्रैक करें", "ऑर्डर नंबर भेजें, स्टेटस पाएँ"), ("human", "👤 टीम से बात करें", "हमारी टीम यहीं जवाब देगी")]
+        body = (box("🌿 *AMRIT DAIRY* 🌿") + "\n🙏 राम राम जी! आपका स्वागत है।\n\n"
+                "हमारे फ़ार्म से सीधे आपकी रसोई तक —\n🧈 देसी गाय का बिलोना घी\n🍯 नेचुरल रॉ फ़ॉरेस्ट शहद\n🐄 गाय ख़रीद / बिक्री\n\n"
+                "✔️ शुद्धता • 🔒 सुरक्षित भुगतान • 🚚 पूरे भारत में डिलीवरी\n\nनीचे *विकल्प चुनें* दबाइए 👇")
+        return Msg("list", body, rows=rows[:10])
 
     def _product(self, conn, s, it, actions) -> TurnResult:
         p: Product | None = self.cat.get(it.product_key)
@@ -170,22 +186,22 @@ class Engine:
         if p.sellable and not self.cat.refresh_live(self.shop, self.price_ttl_s):
             actions.append("catalog:stale")          # live prices unavailable -> do not quote from the snapshot
             s["state"] = "PRODUCT"; s["product_key"] = p.key; _save(conn, s)
-            return TurnResult("PRODUCT", [Msg("buttons", f"{p.title_hi} — {p.short_hi}\nताज़ा कीमत अभी नहीं मिल पा रही 🙏 कुछ मिनट बाद फिर लिखें या टीम से पूछें।",
-                                               [("human", "टीम से बात करें"), ("menu", "मुख्य मेनू")])], actions)
+            return TurnResult("PRODUCT", [Msg("buttons", box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n🙏 ताज़ा कीमत अभी नहीं मिल पा रही — अंदाज़े से नहीं बताएँगे।\n⏳ कुछ मिनट बाद फिर लिखें या टीम से पूछें।",
+                                               [("human", "👤 टीम से बात"), ("menu", "🏠 मुख्य मेनू")])], actions)
         lead_id, created = leads.upsert_lead(conn, self.brand, s["contact_id"], p.key, "enquiry")
         actions += [f"lead:{'created' if created else 'updated'}:{lead_id}", f"label:lead_{p.key}"]
         if p.delivery_class == "registry":
             s["state"] = "HANDOFF"; _save(conn, s)
-            return TurnResult("HANDOFF", [Msg("buttons", "🐄 गाय ख़रीद/बिक्री के लिए हमारी Cow Desk टीम आपसे बात करेगी। नस्ल/दूध/स्वास्थ्य की पुष्टि जाँच के बाद ही होती है।",
-                                               [("human", "टीम से बात करें"), ("menu", "मुख्य मेनू")])], actions, True, "Cow Desk")
+            return TurnResult("HANDOFF", [Msg("buttons", box("🐄 *COW DESK*") + "\nगाय ख़रीद / बिक्री के लिए हमारी Cow Desk टीम आपसे बात करेगी 🙏\n\n🐮 नस्लें: गिर • साहीवाल • हरियाणवी • थारपारकर • राठी\n🔍 नस्ल / दूध / स्वास्थ्य की पुष्टि जाँच के बाद ही\n📞 सीधे कॉल: 80595 93666",
+                                               [("human", "👤 टीम से बात"), ("menu", "🏠 मुख्य मेनू")])], actions, True, "Cow Desk")
         if p.delivery_class == "local_only" or not p.approved_for_sale:
             s["state"] = "PRODUCT"; s["product_key"] = p.key; _save(conn, s)
-            return TurnResult("PRODUCT", [Msg("buttons", f"{p.title_hi}: {p.short_hi}\nयह अभी ऑनलाइन उपलब्ध नहीं है — हमारी टीम उपलब्धता बताएगी।",
-                                               [("human", "टीम से पूछें"), ("menu", "मुख्य मेनू")])], actions)
+            return TurnResult("PRODUCT", [Msg("buttons", box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n🙏 यह अभी ऑनलाइन उपलब्ध नहीं है —\nहमारी टीम आपके इलाक़े की उपलब्धता बताएगी।",
+                                               [("human", "👤 टीम से पूछें"), ("menu", "🏠 मुख्य मेनू")])], actions)
         if not p.sellable:
             s["state"] = "PRODUCT"; s["product_key"] = p.key; _save(conn, s)
-            return TurnResult("PRODUCT", [Msg("buttons", f"{p.title_hi} — {p.short_hi}\nताज़ा कीमत और पैक की पुष्टि हमारी टीम करेगी (कैटलॉग सिंक लंबित)।",
-                                               [("human", "टीम से बात करें"), ("menu", "मुख्य मेनू")])], actions + ["catalog:unverified"])
+            return TurnResult("PRODUCT", [Msg("buttons", box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n🙏 ताज़ा कीमत और पैक की पुष्टि हमारी टीम करेगी।",
+                                               [("human", "👤 टीम से बात"), ("menu", "🏠 मुख्य मेनू")])], actions + ["catalog:unverified"])
         s["product_key"] = p.key; s["state"] = "PACK"; s["variant_id"] = None; s["quantity"] = None
         if s.get("shopify_order_id") or s.get("draft_order_id"):   # new purchase after a completed/abandoned one: fresh quote
             for k in ("quote_json", "quote_ref", "draft_order_id", "invoice_url", "shopify_order_id", "shopify_order_name", "payment_id"):
@@ -193,11 +209,12 @@ class Engine:
             s["address_confirmed"] = 0
         msgs: list[Msg] = []
         if p.media_approved and p.video_url:          # native WhatsApp video (approved MP4 from Shopify media)
-            msgs.append(Msg("video", f"{p.title_hi} 🎥", media_url=p.video_url))
-        elif self.cat.brand_video_url:                # owner's published brand video as a link (YouTube cannot be sent as media)
-            msgs.append(Msg("text", f"🎥 हमारा फ़ार्म और {p.title_hi} कैसे बनता है — देखिए:\n{self.cat.brand_video_url}"))
-        msgs.append(Msg("text", f"🧈 *{p.title_hi}*\n{p.short_hi}"))
-        msgs.append(self._pack_msg(p))
+            msgs.append(Msg("video", f"{ICON.get(p.key, '🌿')} {p.title_hi} 🎥", media_url=p.video_url))
+        # Quick: product story + trust points + pack list in ONE message (was 3 separate messages)
+        video = f"\n🎥 फ़ार्म की झलक: {self.cat.brand_video_url}" if self.cat.brand_video_url and not (p.media_approved and p.video_url) else ""
+        intro = (box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n"
+                 "✔️ ताज़ा कीमत, GST सहित\n🚚 पूरे भारत में कूरियर डिलीवरी\n🔒 UPI / कार्ड से सुरक्षित भुगतान" + video)
+        msgs.append(self._pack_msg(p, intro))
         _save(conn, s)
         leads.upsert_lead(conn, self.brand, s["contact_id"], p.key, "product_selected")
         r = TurnResult("PACK", msgs, actions)
@@ -208,50 +225,53 @@ class Engine:
             return r2
         return r
 
-    def _pack_msg(self, p: Product) -> Msg:
+    def _pack_msg(self, p: Product, intro: str | None = None) -> Msg:
         rows = [(f"pack:{v.label}", f"{v.label_hi} — {_inr(v.net_minor)}"[:24],
-                 ((f"MRP {_inr(v.price_minor)}, {_inr(v.offer_minor)} छूट • " if v.offer_minor else "") + ("उपलब्ध" if v.available else "स्टॉक पुष्टि लंबित"))[:72])
+                 ((f"MRP {_inr(v.price_minor)} • 🎁 {_inr(v.offer_minor)} छूट • " if v.offer_minor else "") + ("✅ उपलब्ध" if v.available else "स्टॉक पुष्टि लंबित"))[:72])
                 for v in p.variants if v.variant_id and v.price_minor]
-        return Msg("list", "पैक साइज़ चुनिए 👇 (कीमत टैक्स सहित, कूरियर मुफ़्त*)", rows=rows)
+        head = (intro + "\n\n") if intro else ""
+        return Msg("list", head + "📦 *पैक चुनिए* 👇 (कीमत GST सहित)", rows=rows)
 
     def _pack(self, conn, s, pack_label, actions) -> TurnResult:
         p = self.cat.get(s["product_key"])
         v = next((v for v in p.variants if _norm_label(v.label) == _norm_label(pack_label or "")), None)
         if not v or not v.variant_id:
-            return TurnResult("PACK", [Msg("text", "यह पैक उपलब्ध नहीं है — नीचे से चुनिए 👇"), self._pack_msg(p)], actions)
+            return TurnResult("PACK", [Msg("text", "🙏 यह पैक उपलब्ध नहीं है — नीचे से चुनिए 👇"), self._pack_msg(p)], actions)
         if v.available is False:
-            return TurnResult("PACK", [Msg("text", f"{v.label_hi} अभी स्टॉक में नहीं है 🙏 दूसरा पैक चुनिए:"), self._pack_msg(p)], actions)
+            return TurnResult("PACK", [Msg("text", f"🙏 {v.label_hi} अभी स्टॉक में नहीं है — दूसरा पैक चुनिए 👇"), self._pack_msg(p)], actions)
         s["variant_id"] = v.variant_id; s["state"] = "QTY"; _save(conn, s)
-        price_line = f"{_inr(v.net_minor)} (MRP {_inr(v.price_minor)}, {_inr(v.offer_minor)} WhatsApp छूट)" if v.offer_minor else _inr(v.price_minor)
-        return TurnResult("QTY", [Msg("buttons", f"{p.title_hi} {v.label_hi} — {price_line}\nकितने पैक चाहिए?", [("qty:1", "1"), ("qty:2", "2"), ("qty:3", "3")])], actions)
+        price_line = f"*{_inr(v.net_minor)}*\n🏷️ MRP {_inr(v.price_minor)} • 🎁 {_inr(v.offer_minor)} WhatsApp छूट" if v.offer_minor else f"*{_inr(v.price_minor)}*"
+        return TurnResult("QTY", [Msg("buttons", f"✅ {ICON.get(p.key, '🌿')} *{p.title_hi}* — {v.label_hi}\n💰 {price_line}\n\nकितने पैक भेजें? 👇\n_(ज़्यादा चाहिए तो संख्या लिख दीजिए)_",
+                                              [("qty:1", "1 पैक"), ("qty:2", "2 पैक"), ("qty:3", "3 पैक")])], actions)
 
     def _qty(self, conn, s, qty, actions) -> TurnResult:
         if not (1 <= qty <= 20):
-            return TurnResult("QTY", [Msg("text", "1 से 20 के बीच संख्या लिखिए 🙏")], actions)
+            return TurnResult("QTY", [Msg("text", "🙏 कृपया 1 से 20 के बीच संख्या लिखिए।\n_20 से ज़्यादा के लिए *व्यक्ति* लिखें — थोक कीमत टीम बताएगी।_")], actions)
         s["quantity"] = qty
         cust = self.shop.find_customer_by_phone(s["phone_e164"])
         addrs = cust.addresses if cust else []
         s["customer_id"] = cust.id if cust else None
         if len(addrs) == 1:
             s["address_json"] = json.dumps(addrs[0].__dict__); s["state"] = "ADDRESS_CONFIRM"; _save(conn, s)
-            return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", f"Aapka pichhla delivery address hamare paas saved hai:\n📍 {addrs[0].masked_hi()}\nKya aapka order isi address par bhejein?",
-                                                       [("addr_yes", "Haan, isi address par"), ("addr_change", "Address change karna hai"), ("addr_later", "Baad mein")])], actions)
+            return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", box("📍 *DELIVERY ADDRESS*") + f"\nआपका पिछला पता हमारे पास सुरक्षित है 👇\n\n🏠 {addrs[0].masked_hi()}\n\nक्या इसी पते पर भेजें?",
+                                                       [("addr_yes", "✅ हाँ, यही पता"), ("addr_change", "✏️ नया पता"), ("addr_later", "⏳ बाद में")])], actions)
         if len(addrs) > 1:
             s["state"] = "ADDRESS_CONFIRM"; s["address_json"] = json.dumps([a.__dict__ for a in addrs]); _save(conn, s)
-            rows = [(f"addr:{i}", a.city[:24], a.masked_hi()[:72]) for i, a in enumerate(addrs[:8])] + [("addr_change", "नया पता", "दूसरा पता भेजें")]
-            return TurnResult("ADDRESS_CONFIRM", [Msg("list", "आपके कई पते saved हैं — किस पर भेजें?", rows=rows)], actions)
+            rows = [(f"addr:{i}", a.city[:24], a.masked_hi()[:72]) for i, a in enumerate(addrs[:8])] + [("addr_change", "✏️ नया पता", "दूसरा पता भेजें")]
+            return TurnResult("ADDRESS_CONFIRM", [Msg("list", box("📍 *DELIVERY ADDRESS*") + "\nआपके कई पते सुरक्षित हैं 🙏\nकिस पते पर भेजें? 👇", rows=rows)], actions)
         s["state"] = "ADDRESS_COLLECT"; _save(conn, s)
         return TurnResult("ADDRESS_COLLECT", [self._address_prompt()], actions)
 
     def _address_prompt(self) -> Msg:
-        return Msg("text", "🏠 पूरा Delivery Address एक ही message में भेजें:\nनाम, मकान/गली, एरिया/गाँव, शहर, ज़िला, राज्य, PIN (6 अंक), मोबाइल")
+        return Msg("text", box("🏠 *DELIVERY ADDRESS*") + "\nपूरा पता *एक ही मैसेज* में भेजिए 👇\n\n👤 नाम\n🏠 मकान / गली\n📍 एरिया / गाँव, शहर, ज़िला\n🗺️ राज्य + PIN (6 अंक)\n📞 मोबाइल नंबर\n\n"
+                           "_उदाहरण:_ Ramesh Kumar, H.No 12 Gali 3, Sector 15, Sonipat, Haryana 131001, 9876543210")
 
     def _address_collect(self, conn, s, text_in, actions) -> TurnResult:
         a = parse_address(text_in, s["phone_e164"])
         if not a:
-            return TurnResult("ADDRESS_COLLECT", [Msg("text", "पता अधूरा लगा 🙏 कृपया 6-अंकों का PIN और शहर/ज़िला ज़रूर लिखें।"), self._address_prompt()], actions)
+            return TurnResult("ADDRESS_COLLECT", [Msg("text", "🙏 पता थोड़ा अधूरा लगा जी —\n📌 6 अंकों का *PIN* और *शहर / ज़िला* ज़रूर लिखें।"), self._address_prompt()], actions)
         s["address_json"] = json.dumps(a.__dict__); s["state"] = "ADDRESS_CONFIRM"; _save(conn, s)
-        return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", f"यह पता सही है?\n📍 {a.summary_hi()}", [("addr_yes", "हाँ, सही है"), ("addr_change", "बदलना है")])], actions)
+        return TurnResult("ADDRESS_CONFIRM", [Msg("buttons", f"📍 *यह पता सही है?*\n\n🏠 {a.summary_hi()}", [("addr_yes", "✅ हाँ, सही है"), ("addr_change", "✏️ बदलना है")])], actions)
 
     def _address_confirmed(self, conn, s, actions) -> TurnResult:
         raw = json.loads(s["address_json"])
@@ -259,7 +279,7 @@ class Engine:
             raw = raw[0]
         a = Address(**{k: raw[k] for k in Address.__dataclass_fields__ if k in raw})
         if a.country.lower() not in ("india", "in"):
-            return TurnResult("ADDRESS_COLLECT", [Msg("text", "फ़िलहाल भारत के बाहर डिलीवरी नहीं है 🙏 भारत का पता भेजें या `EXPORT` लिखकर प्रतीक्षा-सूची में जुड़ें।")], actions + ["label:export_waitlist"])
+            return TurnResult("ADDRESS_COLLECT", [Msg("text", "🙏 फ़िलहाल भारत के बाहर डिलीवरी नहीं है।\n🇮🇳 भारत का पता भेजें, या *EXPORT* लिखकर प्रतीक्षा-सूची में जुड़ें।")], actions + ["label:export_waitlist"])
         s["address_confirmed"] = 1
         p = self.cat.get(s["product_key"]); v = next(v for v in p.variants if v.variant_id == s["variant_id"])
         qty = s["quantity"]; discount = v.offer_minor * qty   # owner-approved channel offer only
@@ -270,14 +290,14 @@ class Engine:
         except Exception as exc:
             audit(conn, "engine", "quote.calc_failed", s["session_id"], {"err": f"{type(exc).__name__}"})
             s["state"] = "HANDOFF"; _save(conn, s)
-            return TurnResult("HANDOFF", [Msg("text", "कीमत की पुष्टि अभी नहीं हो पाई 🙏 हमारी टीम सही राशि के साथ लिंक भेजेगी।")], actions + ["case:payment_review"], True, "Payment Review")
+            return TurnResult("HANDOFF", [Msg("text", "🙏 कीमत की पुष्टि अभी नहीं हो पाई —\n👤 हमारी टीम सही राशि के साथ लिंक भेजेगी।")], actions + ["case:payment_review"], True, "Payment Review")
         if not calc.available or (calc.inventory_policy == "DENY" and calc.inventory_qty is not None and calc.inventory_qty < qty):
             v.available = False if not calc.available else v.available
             s["state"] = "PACK"; _save(conn, s)
-            return TurnResult("PACK", [Msg("text", f"{v.label_hi} अभी {'स्टॉक में नहीं' if calc.available else 'उपलब्ध नहीं'} है 🙏 दूसरा पैक चुनिए:"), self._pack_msg(p)], actions + ["stock:insufficient"])
+            return TurnResult("PACK", [Msg("text", f"🙏 {v.label_hi} अभी {'स्टॉक में नहीं' if calc.available else 'उपलब्ध नहीं'} है — दूसरा पैक चुनिए 👇"), self._pack_msg(p)], actions + ["stock:insufficient"])
         if calc.shipping_handle is None:
             s["state"] = "ADDRESS_COLLECT"; _save(conn, s)
-            return TurnResult("ADDRESS_COLLECT", [Msg("text", "इस पते/PIN पर अभी डिलीवरी उपलब्ध नहीं दिख रही 🙏 दूसरा पता भेजें या *व्यक्ति* लिखें।")], actions + ["shipping:no_rate"])
+            return TurnResult("ADDRESS_COLLECT", [Msg("text", "🙏 इस PIN पर अभी कूरियर डिलीवरी उपलब्ध नहीं दिख रही।\n📍 दूसरा पता भेजें या *व्यक्ति* लिखें — टीम रास्ता निकालेगी।")], actions + ["shipping:no_rate"])
         if calc.unit_minor != v.price_minor:          # snapshot was stale: adopt Shopify's price, never ours
             audit(conn, "engine", "price.refreshed", s["session_id"], {"old": v.price_minor, "live": calc.unit_minor})
             v.price_minor = calc.unit_minor; actions.append("price:refreshed")
@@ -292,19 +312,19 @@ class Engine:
                  "tax_note": "कीमत में GST शामिल" if calc.taxes_included else "GST अतिरिक्त"}
         s["quote_json"] = json.dumps(quote); s["quote_ref"] = s["quote_ref"] or f"AMQ-{uuid.uuid4().hex[:10].upper()}"; s["state"] = "QUOTE"; _save(conn, s)
         leads.upsert_lead(conn, self.brand, s["contact_id"], p.key, "address_confirmed")
-        disc_line = f"WhatsApp छूट: −{_inr(calc.discount_minor)}\n" if calc.discount_minor else ""
-        tax_line = f"(इसमें GST {_inr(calc.tax_minor)} शामिल)" if calc.taxes_included and calc.tax_minor else (f"+ GST {_inr(calc.tax_minor)}" if calc.tax_minor else "")
-        ship_line = "मुफ़्त" if calc.shipping_minor == 0 else f"{_inr(calc.shipping_minor)} ({calc.shipping_title})"
-        txt = (f"🧾 *ऑर्डर सारांश*\n{p.title_hi} {v.label_hi} × {qty} = {_inr(sub)}\n{disc_line}कूरियर: {ship_line}\n"
-               f"*कुल: {_inr(calc.total_minor)}* {tax_line}\n📍 {a.summary_hi()}\nभुगतान का सुरक्षित लिंक भेजें?")
-        return TurnResult("QUOTE", [Msg("buttons", txt, [("confirm_yes", "✅ हाँ, लिंक भेजें"), ("addr_change", "पता बदलें"), ("confirm_no", "पैक बदलें")])], actions)
+        disc_line = f"🎁 WhatsApp छूट: −{_inr(calc.discount_minor)}\n" if calc.discount_minor else ""
+        tax_line = f"_(इसमें GST {_inr(calc.tax_minor)} शामिल)_" if calc.taxes_included and calc.tax_minor else (f"_+ GST {_inr(calc.tax_minor)}_" if calc.tax_minor else "")
+        ship_line = "मुफ़्त 🎉" if calc.shipping_minor == 0 else f"{_inr(calc.shipping_minor)} ({calc.shipping_title})"
+        txt = (box("🧾 *ORDER SUMMARY*") + f"\n{ICON.get(p.key, '🌿')} {p.title_hi} {v.label_hi} × {qty} = {_inr(sub)}\n{disc_line}🚚 कूरियर: {ship_line}\n"
+               f"━━━━━━━━━━━━━━\n💰 *कुल: {_inr(calc.total_minor)}* {tax_line}\n\n📍 {a.summary_hi()}\n\nसब सही है? सुरक्षित भुगतान लिंक भेजें 👇")
+        return TurnResult("QUOTE", [Msg("buttons", txt, [("confirm_yes", "✅ भुगतान लिंक भेजें"), ("addr_change", "📍 पता बदलें"), ("confirm_no", "🔄 पैक बदलें")])], actions)
 
     def _create_payment(self, conn, s, actions) -> TurnResult:
         # idempotent on quote_ref: an existing draft is reused, never duplicated
         existing = conn.execute(text("SELECT draft_order_id FROM draft_order_ref WHERE quote_ref=:q"), {"q": s["quote_ref"]}).fetchone()
         if existing:
             s["state"] = "AWAITING_PAYMENT"; _save(conn, s)
-            return TurnResult("AWAITING_PAYMENT", [Msg("text", f"आपका भुगतान लिंक 👇\n{s['invoice_url']}")], actions + ["draft:reused"])
+            return TurnResult("AWAITING_PAYMENT", [Msg("text", box("💳 *PAYMENT*") + f"\nआपका सुरक्षित भुगतान लिंक 👇\n🔗 {s['invoice_url']}")], actions + ["draft:reused"])
         raw = json.loads(s["address_json"]); raw = raw[0] if isinstance(raw, list) else raw
         a = Address(**{k: raw[k] for k in Address.__dataclass_fields__ if k in raw})
         q = json.loads(s["quote_json"])
@@ -316,13 +336,15 @@ class Engine:
         if d.total_minor != q["total_minor"] or d.currency != q["currency"]:
             audit(conn, "engine", "quote.mismatch", s["session_id"], {"quoted": q["total_minor"], "shopify": d.total_minor})
             s["state"] = "HANDOFF"; _save(conn, s)
-            return TurnResult("HANDOFF", [Msg("text", "कीमत की पुष्टि में अंतर आया — हमारी टीम सही राशि के साथ लिंक भेजेगी 🙏")], actions + ["case:payment_review"], True, "Payment Review")
+            return TurnResult("HANDOFF", [Msg("text", "🙏 कीमत की पुष्टि में अंतर आया —\n👤 हमारी टीम सही राशि के साथ लिंक भेजेगी।")], actions + ["case:payment_review"], True, "Payment Review")
         conn.execute(text("INSERT INTO draft_order_ref(draft_order_id, session_id, quote_ref, created_at) VALUES (:d,:s,:q,:n)"),
                      {"d": d.id, "s": s["session_id"], "q": s["quote_ref"], "n": now_iso()})
         s["draft_order_id"] = d.id; s["invoice_url"] = d.invoice_url; s["state"] = "AWAITING_PAYMENT"; _save(conn, s)
         leads.upsert_lead(conn, self.brand, s["contact_id"], s["product_key"], "payment_pending")
-        return TurnResult("AWAITING_PAYMENT", [Msg("text", f"🔒 सुरक्षित भुगतान लिंक (UPI / कार्ड / नेट-बैंकिंग):\n{d.invoice_url}\nकुल {_inr(d.total_minor)} • लिंक 48 घंटे मान्य\n"
-                                                           "भुगतान सफल होते ही ऑर्डर नंबर अपने-आप यहीं मिलेगा — screenshot भेजने की ज़रूरत नहीं।")],
+        return TurnResult("AWAITING_PAYMENT", [Msg("text", box("💳 *PAYMENT*") + f"\nआपका ऑर्डर लगभग तैयार है जी 🙏\n\n💰 कुल राशि: *{_inr(d.total_minor)}*\n🔗 {d.invoice_url}\n\n"
+                                                           "📱 UPI / कार्ड / नेट-बैंकिंग — सब चलता है\n⏳ लिंक 48 घंटे मान्य\n"
+                                                           "✅ भुगतान होते ही ऑर्डर नंबर अपने-आप यहीं आएगा — screenshot की ज़रूरत नहीं\n\n"
+                                                           "_Amrit Dairy • Safe • Simple • Verified_")],
                           actions + [f"draft:{d.id}", "label:payment_pending"])
 
     def _testpay(self, conn, s, actions) -> TurnResult:
@@ -330,7 +352,7 @@ class Engine:
             return TurnResult(s["state"], [self._menu()], actions + ["testpay:denied"])
         existing = conn.execute(text("SELECT draft_order_id FROM draft_order_ref WHERE quote_ref=:q"), {"q": s.get("quote_ref") or ""}).fetchone()
         if existing and s.get("state") == "AWAITING_PAYMENT" and (s.get("quote_ref") or "").startswith("AMQ-TEST-"):
-            return TurnResult("AWAITING_PAYMENT", [Msg("text", f"Test link (₹{self.test_payment_minor // 100}) 👇\n{s['invoice_url']}")], actions + ["draft:reused"])
+            return TurnResult("AWAITING_PAYMENT", [Msg("text", box(f"🧪 *TEST ₹{self.test_payment_minor // 100}*") + f"\nटेस्ट भुगतान लिंक 👇\n🔗 {s['invoice_url']}")], actions + ["draft:reused"])
         cust = self.shop.find_customer_by_phone(s["phone_e164"])
         addr = (cust.addresses[0] if cust and cust.addresses else Address("Engine Test", "Amrit Dairy, Rajbhaya Garhi Brahmanan", "Sonipat", "Haryana", "131001", s["phone_e164"]))
         for k in ("draft_order_id", "invoice_url", "shopify_order_id", "shopify_order_name", "payment_id"):
@@ -347,28 +369,45 @@ class Engine:
                      {"d": d.id, "s": s["session_id"], "q": s["quote_ref"], "n": now_iso()})
         s["draft_order_id"] = d.id; s["invoice_url"] = d.invoice_url; s["state"] = "AWAITING_PAYMENT"; _save(conn, s)
         audit(conn, "engine", "testpay.created", s["session_id"], {"draft": d.id, "amount_minor": d.total_minor})
-        return TurnResult("AWAITING_PAYMENT", [Msg("text", f"🧪 GATEWAY TEST — ₹{self.test_payment_minor // 100} (कोई सामान नहीं भेजा जाएगा)\n{d.invoice_url}\n"
-                                                           "भुगतान के बाद पुष्टि अपने-आप आएगी — यही असली gateway/webhook test है।")], actions + [f"draft:{d.id}", "testpay:created"])
+        return TurnResult("AWAITING_PAYMENT", [Msg("text", box(f"🧪 *GATEWAY TEST ₹{self.test_payment_minor // 100}*") + f"\n🔗 {d.invoice_url}\n\n"
+                                                           "📦 कोई सामान नहीं भेजा जाएगा (ऑर्डर पर shipping hold)\n✅ भुगतान होते ही पुष्टि अपने-आप यहीं आएगी —\nयही असली gateway + webhook test है।")], actions + [f"draft:{d.id}", "testpay:created"])
 
     def _paid_claim(self, conn, s, actions) -> TurnResult:
         if s["state"] == "ORDERED":
-            return TurnResult("ORDERED", [Msg("text", f"जी, आपका भुगतान मिल चुका है ✅ ऑर्डर {s['shopify_order_name']}।")], actions)
-        return TurnResult(s["state"], [Msg("text", "धन्यवाद 🙏 भुगतान की पुष्टि हमें बैंक/गेटवे से अपने-आप मिलती है — मिलते ही ऑर्डर नंबर यहीं आएगा। "
-                                               "अगर 15 मिनट में न आए तो *व्यक्ति* लिखें, टीम Razorpay में जाँच करेगी।")], actions + ["label:payment_verification_pending"])
+            return TurnResult("ORDERED", [Msg("text", f"✅ जी, आपका भुगतान मिल चुका है!\n🧾 ऑर्डर: *{s['shopify_order_name']}*\n📦 Dispatch होते ही tracking यहीं आएगी।")], actions)
+        return TurnResult(s["state"], [Msg("text", "धन्यवाद जी 🙏\n🔒 भुगतान की पुष्टि हमें बैंक / गेटवे से *अपने-आप* मिलती है —\nमिलते ही ऑर्डर नंबर यहीं आएगा।\n\n"
+                                               "⏳ 15 मिनट में न आए तो *PAYMENT* या *व्यक्ति* लिखें — टीम Razorpay में जाँच करेगी।")], actions + ["label:payment_verification_pending"])
 
     def _track(self, conn, s, actions) -> TurnResult:
         if s.get("shopify_order_name"):
-            return TurnResult(s["state"], [Msg("text", f"📦 ऑर्डर {s['shopify_order_name']}: स्थिति की जानकारी dispatch के बाद tracking लिंक के साथ आएगी।")], actions + ["track:known_order"])
-        return TurnResult(s["state"], [Msg("text", "📦 अपना ऑर्डर नंबर (जैसे #1150) भेजें — हम स्थिति बताएँगे।")], actions + ["label:order_intent", "track:ask_number"])
+            return TurnResult(s["state"], [Msg("text", box("📦 *ORDER STATUS*") + f"\n🧾 ऑर्डर: *{s['shopify_order_name']}*\n🚚 Dispatch होते ही tracking लिंक यहीं आएगा।\n\n" + FOOTER)], actions + ["track:known_order"])
+        return TurnResult(s["state"], [Msg("text", box("📦 *TRACK ORDER*") + "\nअपना ऑर्डर नंबर भेजिए (जैसे *#1150*) 👇\nहम तुरंत स्थिति बताएँगे।")], actions + ["label:order_intent", "track:ask_number"])
+
+
+def _fold(t: str) -> str:
+    """Compare option titles ignoring emoji/punctuation/case: '✅ हाँ, यही पता' == 'हाँ यही पता'."""
+    import re
+    import unicodedata
+    t = "".join(ch for ch in (t or "") if unicodedata.category(ch)[0] in "LNM" or ch.isspace())
+    return re.sub(r"\s+", " ", t).strip().lower()
 
 
 def _numbered_choice(text_in: str, last_options_json: str | None) -> str | None:
-    t = (text_in or "").strip().translate(str.maketrans("०१२३४५६७८९", "0123456789"))
-    if not last_options_json or not t.isdigit():
+    """'2' typed after a numbered list -> 2nd option; a tapped button/list row (arrives as its title) -> that option."""
+    if not last_options_json:
         return None
-    opts = json.loads(last_options_json)
-    n = int(t)
-    return opts[n - 1] if 1 <= n <= len(opts) else None
+    raw = json.loads(last_options_json)
+    ids, titles = (raw.get("ids") or [], raw.get("titles") or []) if isinstance(raw, dict) else (raw, [])
+    t = (text_in or "").strip().translate(str.maketrans("०१२३४५६७८९", "0123456789"))
+    if t.isdigit():
+        n = int(t)
+        return ids[n - 1] if 1 <= n <= len(ids) else None
+    f = _fold(t)
+    if f:
+        for i, title in zip(ids, titles):
+            if _fold(title) == f:
+                return i
+    return None
 
 
 def render_plain(messages: list[Msg]) -> str:
@@ -385,20 +424,47 @@ def render_plain(messages: list[Msg]) -> str:
     return "\n\n".join(out)
 
 
+STATES = {"haryana": "Haryana", "हरियाणा": "Haryana", "delhi": "Delhi", "दिल्ली": "Delhi", "punjab": "Punjab", "पंजाब": "Punjab",
+          "rajasthan": "Rajasthan", "राजस्थान": "Rajasthan", "uttar pradesh": "Uttar Pradesh", "up": "Uttar Pradesh", "उत्तर प्रदेश": "Uttar Pradesh",
+          "himachal pradesh": "Himachal Pradesh", "himachal": "Himachal Pradesh", "हिमाचल": "Himachal Pradesh", "gujarat": "Gujarat", "गुजरात": "Gujarat",
+          "uttarakhand": "Uttarakhand", "उत्तराखंड": "Uttarakhand", "maharashtra": "Maharashtra", "महाराष्ट्र": "Maharashtra",
+          "madhya pradesh": "Madhya Pradesh", "mp": "Madhya Pradesh", "bihar": "Bihar", "बिहार": "Bihar", "karnataka": "Karnataka",
+          "tamil nadu": "Tamil Nadu", "telangana": "Telangana", "west bengal": "West Bengal", "jammu and kashmir": "Jammu and Kashmir",
+          "chandigarh": "Chandigarh", "kerala": "Kerala", "odisha": "Odisha", "assam": "Assam", "jharkhand": "Jharkhand",
+          "chhattisgarh": "Chhattisgarh", "goa": "Goa", "andhra pradesh": "Andhra Pradesh"}
+
+
 def parse_address(text_in: str, phone: str) -> Address | None:
+    """'Name, house/street, area, city, State PIN, mobile' (any order of the tail) -> Address. City = the last free-text part
+    before the state/PIN part; the mobile number and PIN never become address lines."""
     import re
     t = (text_in or "").strip()
-    pin = re.search(r"\b(\d{6})\b", t)
+    pin = re.search(r"(?<!\d)(\d{6})(?!\d)", t)
     if not pin or len(t) < 20:
         return None
+    mob = re.search(r"(?<!\d)(?:\+?91[\s-]?)?([6-9]\d{9})(?!\d)", t)
     parts = [x.strip() for x in re.split(r"[,\n]+", t) if x.strip()]
-    if len(parts) < 3:
+    state = ""
+    clean: list[str] = []
+    for x in parts:
+        y = re.sub(r"(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{9}(?!\d)", "", x)          # drop mobile
+        y = re.sub(r"(?<!\d)\d{6}(?!\d)", "", y)                              # drop PIN
+        y = re.sub(r"\b(pin|pincode|mob|mobile|ph|phone)\b[:.\s-]*", "", y, flags=re.I).strip(" -–:")
+        key = y.lower().strip()
+        if key in STATES:
+            state = state or STATES[key]; continue
+        for k, v in STATES.items():                                              # "Bengaluru Karnataka" -> city + state
+            if len(k) > 3 and re.search(rf"(^|\s){re.escape(k)}$", key):
+                state = state or v; y = y[: len(y) - len(k)].strip(" -–,"); break
+        if y:
+            clean.append(y)
+    if not state:
+        state = next((v for k, v in STATES.items() if len(k) > 2 and re.search(rf"(^|\W){re.escape(k)}(\W|$)", t, re.I)), "")
+    if len(clean) < 3:
         return None
-    name = parts[0]
-    city = next((x for x in parts[1:] if not re.search(r"\d{6}", x)), parts[1])
-    province = "Haryana" if re.search(r"haryana|हरियाणा", t, re.I) else ("Delhi" if re.search(r"delhi|दिल्ली", t, re.I) else "")
-    mob = re.search(r"\b([6-9]\d{9})\b", t)
-    return Address(name=name, address1=", ".join(parts[1:-1])[:200] or parts[1], city=city[:60], province=province or city[:60], zip=pin.group(1),
+    name, city = clean[0], clean[-1]
+    lines = clean[1:-1]
+    return Address(name=name[:80], address1=", ".join(lines)[:200], city=city[:60], province=state or city[:60], zip=pin.group(1),
                    phone=("+91" + mob.group(1)) if mob else phone)
 
 
@@ -478,5 +544,8 @@ def on_order_paid(conn: Connection, shopify_order: dict[str, Any], shopify: Shop
         audit(conn, "engine", "test_order.hold", s["session_id"], {"order": verified["name"], **hold})
     if s.get("product_key"):
         leads.upsert_lead(conn, s["brand_id"], s["contact_id"], s["product_key"], "ordered")
-    msg = Msg("text", f"✅ भुगतान मिल गया, धन्यवाद जी!\nआपका ऑर्डर *{verified['name']}* confirm हो गया — {_inr(amt)}\nDispatch होते ही tracking इसी WhatsApp पर आएगी।")
+    test = (s.get("quote_ref") or "").startswith("AMQ-TEST-")
+    msg = Msg("text", box("✅ *ORDER CONFIRMED*" if not test else "✅ *TEST PAYMENT VERIFIED*") +
+              f"\nधन्यवाद जी! 🙏 भुगतान मिल गया।\n\n🧾 ऑर्डर: *{verified['name']}*\n💰 राशि: *{_inr(amt)}*\n" +
+              ("📦 Dispatch होते ही tracking इसी WhatsApp पर आएगी।\n\n" if not test else "🧪 Gateway + webhook दोनों सही — इस टेस्ट ऑर्डर पर shipping hold है।\n\n") + FOOTER)
     return {"status": "ordered", "order_id": verified["id"], "order_name": verified["name"], "message": msg.as_dict(), "phone": s["phone_e164"]}

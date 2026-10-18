@@ -83,12 +83,30 @@ class BitespeedMessagingClient:
         return self._post({"channelId": self.channel_id, "recipient": digits(phone), "messageType": "text", "text": text,
                            "sourceContext": self._ctx(third_party_id)})
 
-    def send_buttons(self, phone: str, body: str, buttons: list[tuple[str, str]], third_party_id: str | None = None) -> ApiResult:
+    def send_buttons(self, phone: str, body: str, buttons: list[tuple[str, str]], third_party_id: str | None = None,
+                     footer: str | None = None) -> ApiResult:
         """WhatsApp reply buttons (max 3, title <= 20 chars per WhatsApp rules)."""
         btns = [{"type": "reply", "reply": {"id": bid, "title": title[:20]}} for bid, title in buttons[:3]]
+        inter: dict[str, Any] = {"type": "button", "body": {"text": body[:1024]}, "action": {"buttons": btns}}
+        if footer:
+            inter["footer"] = {"text": footer[:60]}
         return self._post({"channelId": self.channel_id, "recipient": digits(phone), "messageType": "interactive",
-                           "interactive": {"type": "button", "body": {"text": body}, "action": {"buttons": btns}},
-                           "sourceContext": self._ctx(third_party_id)})
+                           "interactive": inter, "sourceContext": self._ctx(third_party_id)})
+
+    def send_media(self, phone: str, kind: str, link: str, caption: str = "", third_party_id: str | None = None) -> ApiResult:
+        return self._post({"channelId": self.channel_id, "recipient": digits(phone), "messageType": kind,
+                           "media": {"link": link, **({"caption": caption[:1024]} if caption else {})}, "sourceContext": self._ctx(third_party_id)})
+
+    def send_list(self, phone: str, body: str, rows: list[tuple[str, str, str]], button: str = "विकल्प चुनें",
+                  footer: str | None = None, third_party_id: str | None = None) -> ApiResult:
+        """WhatsApp list message (≤10 rows; row title ≤24, description ≤72, button ≤20, body ≤1024)."""
+        inter: dict[str, Any] = {"type": "list", "body": {"text": body[:1024]},
+                                 "action": {"button": button[:20], "sections": [{"title": "विकल्प"[:24], "rows": [
+                                     {"id": rid[:200], "title": t[:24], **({"description": d[:72]} if d else {})} for rid, t, d in rows[:10]]}]}}
+        if footer:
+            inter["footer"] = {"text": footer[:60]}
+        return self._post({"channelId": self.channel_id, "recipient": digits(phone), "messageType": "interactive",
+                           "interactive": inter, "sourceContext": self._ctx(third_party_id)})
 
     def send_template(self, phone: str, template_id: str, variables: dict[str, str], third_party_id: str | None = None) -> ApiResult:
         return self._post({"channelId": self.channel_id, "recipient": digits(phone), "template_id": template_id,
@@ -105,6 +123,35 @@ class BitespeedReplyChannel:
 
     def for_phone(self, phone: str) -> "BitespeedReplyChannel":
         return BitespeedReplyChannel(self.client, phone)
+
+    def send_messages(self, conversation_id: int | str, messages: list) -> dict:
+        """Engine messages as native WhatsApp messages: buttons (≤3) -> reply buttons, longer option sets -> list,
+        text -> text. If an interactive send is rejected, that message falls back to numbered plain text so the
+        customer is never left without an answer."""
+        from .engine.state import FOOTER, render_plain
+        sent = 0
+        for i, m in enumerate(messages):
+            tid = f"conv{conversation_id}-{int(time.time())}-{i}"
+            res = None
+            try:
+                if m.type in ("video", "image") and m.media_url:
+                    res = self.client.send_media(self.phone, m.type, m.media_url, m.text, third_party_id=tid)
+                elif m.buttons and len(m.buttons) <= 3 and len(m.text) <= 1024:
+                    res = self.client.send_buttons(self.phone, m.text, m.buttons, third_party_id=tid, footer=FOOTER)
+                elif (m.rows or m.buttons) and len(m.text) <= 1024:
+                    rows = list(m.rows) or [(bid, title, "") for bid, title in m.buttons]
+                    res = self.client.send_list(self.phone, m.text, rows, footer=FOOTER, third_party_id=tid)
+            except Exception as exc:
+                log.info("interactive send error %s -> plain text fallback", type(exc).__name__)
+                res = None
+            if res is None or not res.ok:
+                if res is not None:
+                    log.info("interactive rejected http=%s -> plain text fallback", res.http)
+                plain = self.client.send_text(self.phone, render_plain([m]), third_party_id=tid)
+                if not plain.ok:
+                    raise RuntimeError(f"bitespeed api HTTP {plain.http}: {plain.message}")
+            sent += 1
+        return {"queued": sent}
 
     def send_text(self, conversation_id: int | str, content: str, private: bool = False) -> dict:
         if private:

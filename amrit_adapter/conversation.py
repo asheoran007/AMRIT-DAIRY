@@ -168,7 +168,9 @@ def deliver(conn: Connection, phone: str, conv_id, r, reply: str, note: str, cha
     status = outcome
     if outcome == "send":
         try:
-            if reply:
+            if reply and hasattr(chat, "send_messages") and getattr(r, "messages", None):
+                chat.send_messages(conv_id, r.messages)       # native buttons / lists (Messaging API)
+            elif reply:
                 chat.send_text(conv_id, reply)
             if note:
                 chat.send_text(conv_id, note, private=True)
