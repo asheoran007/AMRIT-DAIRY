@@ -198,3 +198,10 @@ def test_tapped_button_title_maps_back_to_option(engine):
         assert r.state == "QTY"
         r = e.turn(c, PHONE, "2 पैक")                        # tapped reply button
         assert r.state in ("ADDRESS_CONFIRM", "ADDRESS_COLLECT")
+
+
+def test_outbox_order_confirmation_dict_is_sent_as_its_text(fake_post):
+    from amrit_adapter.engine.state import Msg
+    s = BitespeedApiSender(bs.BitespeedMessagingClient(KEY, "917700004877", BASE))
+    res = s.send("ord-1:engine_order_confirm", {"phone": PHONE, "message": Msg("text", "✅ ORDER CONFIRMED #1160").as_dict()})
+    assert res.outcome == "sent" and fake_post[-1]["json"]["text"]["body"] == "✅ ORDER CONFIRMED #1160"

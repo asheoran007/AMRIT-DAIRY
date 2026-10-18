@@ -24,6 +24,14 @@ class Sender(Protocol):
     def send(self, action_key: str, payload: dict) -> SendResult: ...
 
 
+def _message_text(payload: dict) -> str:
+    """Outbox payload 'message' is either plain text or an engine Msg dict ({type, text, buttons?...})."""
+    m = payload.get("message")
+    if isinstance(m, dict):
+        return str(m.get("text") or "")
+    return str(m or "")
+
+
 class DryRunSender:
     """Records what WOULD be sent. Never touches a provider."""
 
@@ -66,7 +74,7 @@ class ChatwootSender:
             if not conv:
                 return SendResult("failed", None, 0, "no console conversation for this phone")
             res = self._req("POST", f"/conversations/{conv}/messages",
-                            json={"content": payload.get("message") or "", "message_type": "outgoing", "private": False})
+                            json={"content": _message_text(payload), "message_type": "outgoing", "private": False})
             return SendResult("sent", f"chatwoot:{res.get('id')}", 0, f"conversation {conv}")
         except Exception as exc:  # network ambiguity -> reconcile path, never blind retry
             kind = type(exc).__name__
@@ -88,7 +96,7 @@ class BitespeedApiSender:
             if payload.get("template_id"):
                 res = self.client.send_template(phone, payload["template_id"], dict(payload.get("variables") or {}), third_party_id=action_key)
             else:
-                res = self.client.send_text(phone, payload.get("message") or "", third_party_id=action_key)
+                res = self.client.send_text(phone, _message_text(payload), third_party_id=action_key)
             if res.ok:
                 return SendResult("sent", f"bitespeed:{res.third_party_id or action_key}", 0, res.message)
             return SendResult("failed", None, 0, f"HTTP {res.http}: {res.message}")
