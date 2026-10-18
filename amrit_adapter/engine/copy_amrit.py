@@ -22,8 +22,8 @@ def box(title: str) -> str:
 WELCOME = (
     "🙏🏼 *राम राम जी, स्वागत है*\n\n"
     "अमृत फार्म से आपकी रसोई तक के सफ़र में\n\n"
-    "यहाँ आपको मिलेगा शुद्ध देसी गाय के पवित्र दूध से तैयार किया गया *दिव्य स्वरूप घी* "
-    "और छोटी मधुमक्खियों का *जंगली शहद*।\n\n"
+    "यहाँ आपको मिलेगा शुद्ध देसी गाय के पवित्र दूध से तैयार किया गया *औषधि जैसा घी* "
+    "और छोटी मधुमक्खियों का *औषधि जैसा जंगली शहद*।\n\n"
     "तो बताइए, क्या चाहिए?\n*विकल्प चुनें* 👇"
 )
 # (id, title ≤24, description ≤72) — order = the owner's numbering 1..7
@@ -55,7 +55,7 @@ HONEY_HEAD = (
     box("🍯 *AMRIT HONEY* 🍯") + "\n"
     "🌿 *Natural Raw Forest Honey*\n\n"
     "असली स्वाद और Lab Report के साथ — छोटी मधुमक्खियों का नेचुरल शहद 🌿\n\n"
-    "*• एक्सपोर्ट Quality • साफ़ जानकारी*\n\n"
+    "*• एक्सपोर्ट Quality • औषधि जैसा शहद • साफ़ जानकारी*\n\n"
     "> 🧪 Lab Tested Quality\n> 🍯 Natural Raw Forest Honey\n> 🌿 Quality & Compliance Checked\n\n"
     "> *अपना Honey Pack चुनिए 👇*\n\n📦 *PACK & PRICE*\n\n"
 )
