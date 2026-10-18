@@ -16,12 +16,16 @@ HUMAN = ["human", "agent", "person", "baat karni", "baat karna", "call me", "व
 STOP = ["stop", "unsubscribe", "बंद", "band karo", "mat bhejo", "रोक"]
 MENU = ["hi", "hello", "hii", "hey", "namaste", "namaskar", "नमस्ते", "नमस्कार", "ram ram", "राम राम", "राम-राम", "menu", "start", "radhe radhe"]
 
+BKB = ["baba ji", "babaji", "buti", "बूटी", "दवाई", "दवाइयां", "दवा", "dawai", "dawa", "ayurved", "आयुर्वेद", "medicine"]
+LOCATION = ["location", "लोकेशन", "farm visit", "farm address", "dairy address", "kahan hai dairy", "map"]
+CONTACT = ["contact", "संपर्क", "number do", "phone number", "mobile number", "bulk", "थोक", "harsh"]
+
 QTY_WORDS = {"ek": 1, "एक": 1, "do": 2, "दो": 2, "teen": 3, "तीन": 3, "char": 4, "चार": 4, "paanch": 5, "पांच": 5, "पाँच": 5}
 
 
 @dataclass(frozen=True)
 class Intent:
-    kind: str                 # product | yes | no | change_address | later | paid_claim | track | human | stop | menu | quantity | pack | unknown
+    kind: str                 # info | cow | product | yes | no | change_address | later | paid_claim | track | human | stop | menu | quantity | pack | unknown
     product_key: str | None = None
     quantity: int | None = None
     pack_label: str | None = None
@@ -41,6 +45,10 @@ def detect(text: str, catalog: Catalog, state: str = "NEW", button_id: str | Non
             return Intent("product", product_key=button_id.split(":", 1)[1], raw=button_id)
         if button_id.startswith("pack:"):
             return Intent("pack", pack_label=button_id.split(":", 1)[1], raw=button_id)
+        if button_id.startswith("info:"):
+            return Intent("info", product_key=button_id.split(":", 1)[1], raw=button_id)
+        if button_id.startswith("cow:"):
+            return Intent("cow", product_key=button_id.split(":", 1)[1], raw=button_id)
         if button_id.startswith("qty:"):
             return Intent("quantity", quantity=int(button_id.split(":", 1)[1]), raw=button_id)
         return Intent({"addr_yes": "yes", "addr_change": "change_address", "addr_later": "later", "confirm_yes": "yes",
@@ -57,6 +65,13 @@ def detect(text: str, catalog: Catalog, state: str = "NEW", button_id: str | Non
         return Intent("change_address", raw=text)
     if any(w in t for w in PAID):
         return Intent("paid_claim", raw=text)
+    if state not in ("ADDRESS_COLLECT", "COW_FORM_BUY", "COW_FORM_SELL", "CUSTOM_QTY"):
+        if any(w in t for w in BKB):
+            return Intent("info", product_key="bkb", raw=text)
+        if any(w in t for w in LOCATION):
+            return Intent("info", product_key="location", raw=text)
+        if any(w in t for w in CONTACT):
+            return Intent("info", product_key="contact", raw=text)
     if any(w in t for w in TRACK) and state not in ("ADDRESS_COLLECT",):
         return Intent("track", raw=text)
     # products (any state: a customer may switch product mid-way)

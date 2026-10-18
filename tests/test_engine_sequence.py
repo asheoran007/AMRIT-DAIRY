@@ -59,8 +59,8 @@ def test_01_02_03_ghee_enquiry_creates_lead_sends_video_and_packs(engine, eng):
         types = [m.type for m in r.messages]
         assert types == ["video", "list"]                                           # real approved video first, then ONE card (story + packs)
         assert r.messages[0].media_url.endswith("ghee-approved.mp4")
-        assert [row[0] for row in r.messages[1].rows] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr"]
-        assert "AMRIT" not in r.messages[1].text and "╭" in r.messages[1].text      # house-style boxed header
+        assert [row[0] for row in r.messages[1].rows] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr", "info:gir_ghee", "info:custom_qty"]
+        assert "*AMRIT GHEE*" in r.messages[1].text and "> `1 Ltr`  •  *₹3,500/-*" in r.messages[1].text   # owner card 19 Oct
         r = e.turn(c, PHONE, button_id="pack:5 L")
         assert r.state == "QTY" and "₹17,000" in r.messages[0].text and "MRP ₹17,500" in r.messages[0].text   # owner-approved ₹500 WhatsApp offer on live ₹17,500
         r = e.turn(c, PHONE, "2")
@@ -159,7 +159,11 @@ def test_restricted_and_unverified_products_never_quote(engine, eng):
     e, shop = eng
     with engine.begin() as c:
         r = e.turn(c, PHONE, "गाय खरीदनी है")
-        assert r.handoff and r.handoff_team == "Cow Desk"
+        assert r.state == "COW_MENU" and "*COW ENQUIRY*" in r.messages[0].text and [b[0] for b in r.messages[0].buttons] == ["cow:buy", "cow:sell", "cow:info"]
+        r = e.turn(c, PHONE, "1")                                             # owner numbering: 1 = COW ख़रीदनी है
+        assert r.state == "COW_FORM_BUY" and "*COW BUY REQUEST*" in r.messages[0].text
+        r = e.turn(c, PHONE, "Ramesh, 9876543210, Gohana, Sonipat Haryana, Gir, 12 L, 80000")
+        assert r.handoff and r.handoff_team == "Cow Desk" and "cow_form:buy" in r.actions
         r2 = e.turn(c, "+919999900001", "doodh chahiye")
         assert r2.state == "PRODUCT" and "ऑनलाइन उपलब्ध नहीं" in r2.messages[0].text
 
@@ -180,8 +184,8 @@ def test_live_catalog_has_no_video_so_engine_sends_image_fallback_only_when_appr
     e = Engine(Catalog.load(), FakeShopifyClient(), BRAND)
     with engine.begin() as c:
         r = e.turn(c, PHONE, "ghee")
-        assert r.state == "PACK" and [m.type for m in r.messages] == ["list"]       # quick: one message
-        assert "https://youtu.be/BAnglrsKYuw" in r.messages[0].text and r.messages[0].media_url is None   # owner's brand video as a link
+        assert r.state == "PACK" and [m.type for m in r.messages] == ["list"]       # quick: one message (owner card)
+        assert r.messages[0].media_url is None
         assert "₹3,500" in r.messages[0].rows[0][1] and "₹17,000" in r.messages[0].rows[1][1]   # net of the approved ₹500 offer
         assert "MRP ₹17,500" in r.messages[0].rows[1][2] and "₹32,000" in r.messages[0].rows[2][1]
 
@@ -259,8 +263,8 @@ def test_numbered_text_replies_map_to_last_options_and_render_plain(engine, eng)
     with engine.begin() as c:
         r = e.turn(c, PHONE, "ghee")
         plain = render_plain(r.messages)
-        assert "1️⃣ 1 लीटर — ₹3,500" in plain and "2️⃣ 5 लीटर — ₹17,000" in plain and "(नंबर लिखकर भेजें)" in plain
-        r = e.turn(c, PHONE, "2")                        # → pack:5 Ltr
+        assert "1 Ltr • ₹3,500/-" in plain and "5 Ltr • ₹17,000/-" in plain and "(नंबर लिखकर भेजें)" in plain
+        r = e.turn(c, PHONE, "5 Ltr • ₹17,000/-")        # tapped list row (arrives as its title) → pack:5 Ltr
         assert r.state == "QTY" and "5 लीटर" in r.messages[0].text
         r = e.turn(c, PHONE, "३")                        # Devanagari digit → qty:3
         assert r.state == "ADDRESS_CONFIRM"

@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..db import audit, new_id, now_iso
+from . import copy_amrit as C
 from . import intent as intent_mod
 from . import leads
 from .catalog import Catalog, Product, _norm as _norm_label
@@ -27,6 +28,7 @@ class Msg:
     buttons: list[tuple[str, str]] = field(default_factory=list)   # (id, title ≤20)
     rows: list[tuple[str, str, str]] = field(default_factory=list)  # (id, title ≤24, description ≤72)
     media_url: str | None = None
+    numbered: list[str] | None = None   # option ids for typed "1","2"… when the owner's text numbers differently from the rows
 
     def as_dict(self) -> dict[str, Any]:
         d = {"type": self.type, "text": self.text}
@@ -110,8 +112,9 @@ class Engine:
             audit(conn, "engine", "turn.error", phone[-4:], {"state": state, "error": type(exc).__name__})
             return TurnResult(state, [Msg("text", self.RETRY_MSG)], [f"error:{type(exc).__name__}"])
         pairs = [(i, t) for m in r.messages for i, t in m.buttons] + [(i, t) for m in r.messages for i, t, _ in m.rows]
-        # ids in display order (numbered replies) + titles (a tapped WhatsApp button/list row arrives as its title text)
-        opts = {"ids": [i for i, _ in pairs], "titles": [t for _, t in pairs]} if pairs else None
+        numbered = next((m.numbered for m in r.messages if m.numbered), None)
+        # ids for typed numbers + all (id, title) pairs (a tapped WhatsApp button/list row arrives as its title text)
+        opts = {"ids": numbered or [i for i, _ in pairs], "pairs": pairs} if pairs else None
         conn.execute(text("UPDATE conversation_session SET last_options_json=:o WHERE brand_id=:b AND phone_e164=:p"),
                      {"o": json.dumps(opts, ensure_ascii=False) if opts else None, "b": self.brand, "p": phone})
         return r
@@ -136,6 +139,19 @@ class Engine:
             return TurnResult("HANDOFF", [Msg("text", box("👤 *TEAM SUPPORT*") + "\nठीक है जी 🙏\nआपकी बात हमारी टीम तक पहुँचा दी है —\n⏳ थोड़ी देर में एक व्यक्ति यहीं जवाब देगा।\n\n📞 जल्दी हो तो कॉल करें: 77000 04877")], ["label:human_owner", "assign:Sales"], True, "Sales")
         if s["state"] == "HANDOFF":
             return TurnResult("HANDOFF", [], ["noop:human_owns"], True)
+        if it.kind == "info":
+            return self._info(conn, s, it.product_key, actions)
+        if it.kind == "cow":
+            return self._cow(conn, s, it.product_key, actions)
+        # form states: whatever the customer sends next (breed names, "ghee", numbers) IS the details; only *menu* escapes
+        if s["state"] in ("COW_FORM_BUY", "COW_FORM_SELL") and it.kind not in ("menu", "stop", "human") and (text_in or "").strip():
+            kind = "buy" if s["state"] == "COW_FORM_BUY" else "sell"
+            s["state"] = "HANDOFF"; _save(conn, s)
+            return TurnResult("HANDOFF", [Msg("text", C.COW_FORM_THANKS)], actions + [f"label:lead_cow_{kind}", "assign:Cow Desk", f"cow_form:{kind}"], True, "Cow Desk")
+        if s["state"] == "CUSTOM_QTY" and it.kind not in ("menu", "stop", "human") and (text_in or "").strip():
+            s["state"] = "HANDOFF"; _save(conn, s)
+            return TurnResult("HANDOFF", [Msg("text", "धन्यवाद जी 🙏\nआपकी मात्रा हमारी टीम तक पहुँच गई है — सही कीमत के साथ जल्द जवाब देंगे।\n\n📦 Bulk: 📱 " + C.PHONE_BULK + "\n\n" + C.FOOTER)],
+                              actions + ["label:bulk_enquiry", "assign:Sales"], True, "Sales")
         if it.kind == "track":
             return self._track(conn, s, actions)
         if it.kind == "paid_claim":
@@ -143,6 +159,8 @@ class Engine:
         if it.kind == "product":
             return self._product(conn, s, it, actions)
         if it.kind == "menu" or s["state"] == "NEW":
+            if it.kind == "menu":
+                s["state"] = "NEW"          # menu always resets an open form / step (cow form, custom qty)
             _save(conn, s)
             return TurnResult(s["state"], [self._menu()], actions)
 
@@ -181,14 +199,38 @@ class Engine:
 
     # ---------------- steps ----------------
     def _menu(self) -> Msg:
-        rows = [(f"product:{p.key}", f"{ICON.get(p.key, '🌿')} {SHORT.get(p.key, p.title_hi)}"[:24],
-                 ("ताज़ा कीमत • पैक चुनें • तुरंत ऑर्डर" if p.sellable else "जानकारी • टीम से बात")[:72])
-                for p in self.cat.products.values() if p.approved_for_sale or p.delivery_class == "registry"]
-        rows += [("track", "📦 ऑर्डर ट्रैक करें", "ऑर्डर नंबर भेजें, स्टेटस पाएँ"), ("human", "👤 टीम से बात करें", "हमारी टीम यहीं जवाब देगी")]
-        body = (box("🌿 *AMRIT DAIRY* 🌿") + "\n🙏 राम राम जी! आपका स्वागत है।\n\n"
-                "हमारे फ़ार्म से सीधे आपकी रसोई तक —\n🧈 देसी गाय का बिलोना घी\n🍯 नेचुरल रॉ फ़ॉरेस्ट शहद\n🐄 गाय ख़रीद / बिक्री\n\n"
-                "✔️ शुद्धता • 🔒 सुरक्षित भुगतान • 🚚 पूरे भारत में डिलीवरी\n\nनीचे *विकल्प चुनें* दबाइए 👇")
-        return Msg("list", body, rows=rows[:10])
+        rows = [r for r in C.MENU_ROWS if not r[0].startswith("product:") or self.cat.get(r[0].split(":", 1)[1])]
+        return Msg("list", C.WELCOME, rows=rows[:10])
+
+    def _info(self, conn, s, key, actions) -> TurnResult:
+        if key == "cow_info":
+            return self._cow(conn, s, "info", actions)
+        if key == "gir_ghee":
+            s["state"] = "HANDOFF"; _save(conn, s)
+            return TurnResult("HANDOFF", [Msg("text", C.GIR_GHEE)], actions + ["label:lead_gir_ghee", "assign:Sales"], True, "Sales")
+        if key == "custom_qty":
+            s["state"] = "CUSTOM_QTY"; _save(conn, s)
+            return TurnResult("CUSTOM_QTY", [Msg("text", C.CUSTOM_QTY)], actions + ["label:bulk_enquiry"])
+        if key == "bkb":
+            _save(conn, s)
+            return TurnResult(s["state"], [Msg("buttons", C.BKB, list(C.BKB_BUTTONS))], actions + ["label:lead_bkb"])
+        text_ = C.INFO.get(key)
+        if not text_:
+            return TurnResult(s["state"], [self._menu()], actions)
+        _save(conn, s)
+        return TurnResult(s["state"], [Msg("buttons", text_, [("menu", "🏠 मुख्य मेनू")])], actions + [f"info:{key}"])
+
+    def _cow(self, conn, s, which, actions) -> TurnResult:
+        if which == "buy":
+            s["state"] = "COW_FORM_BUY"; _save(conn, s)
+            return TurnResult("COW_FORM_BUY", [Msg("text", C.COW_BUY)], actions + ["label:lead_cow", "cow:buy"])
+        if which == "sell":
+            s["state"] = "COW_FORM_SELL"; _save(conn, s)
+            return TurnResult("COW_FORM_SELL", [Msg("text", C.COW_SELL)], actions + ["label:lead_cow", "cow:sell"])
+        s["state"] = "COW_MENU"; _save(conn, s)
+        if which == "info":
+            return TurnResult("COW_MENU", [Msg("buttons", C.COW_INFO, list(C.COW_INFO_BUTTONS))], actions + ["cow:info"])
+        return TurnResult("COW_MENU", [Msg("buttons", C.COW_ENQUIRY, list(C.COW_BUTTONS))], actions + ["label:lead_cow"])
 
     def _product(self, conn, s, it, actions) -> TurnResult:
         p: Product | None = self.cat.get(it.product_key)
@@ -202,7 +244,8 @@ class Engine:
         lead_id, created = leads.upsert_lead(conn, self.brand, s["contact_id"], p.key, "enquiry")
         actions += [f"lead:{'created' if created else 'updated'}:{lead_id}", f"label:lead_{p.key}"]
         if p.delivery_class == "registry":
-            s["state"] = "HANDOFF"; _save(conn, s)
+            return self._cow(conn, s, "menu", actions)
+        if False:
             return TurnResult("HANDOFF", [Msg("buttons", box("🐄 *COW DESK*") + "\nगाय ख़रीद / बिक्री के लिए हमारी Cow Desk टीम आपसे बात करेगी 🙏\n\n🐮 नस्लें: गिर • साहीवाल • हरियाणवी • थारपारकर • राठी\n🔍 नस्ल / दूध / स्वास्थ्य की पुष्टि जाँच के बाद ही\n📞 सीधे कॉल: 80595 93666",
                                                [("human", "👤 टीम से बात"), ("menu", "🏠 मुख्य मेनू")])], actions, True, "Cow Desk")
         if p.delivery_class == "local_only" or not p.approved_for_sale:
@@ -222,10 +265,7 @@ class Engine:
         if p.media_approved and p.video_url:          # native WhatsApp video (approved MP4 from Shopify media)
             msgs.append(Msg("video", f"{ICON.get(p.key, '🌿')} {p.title_hi} 🎥", media_url=p.video_url))
         # Quick: product story + trust points + pack list in ONE message (was 3 separate messages)
-        video = f"\n🎥 फ़ार्म की झलक: {self.cat.brand_video_url}" if self.cat.brand_video_url and not (p.media_approved and p.video_url) else ""
-        intro = (box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n"
-                 "✔️ ताज़ा कीमत, GST सहित\n🚚 पूरे भारत में कूरियर डिलीवरी\n🔒 UPI / कार्ड से सुरक्षित भुगतान" + video)
-        msgs.append(self._pack_msg(p, intro))
+        msgs.append(self._pack_msg(p, card=True))
         _save(conn, s)
         leads.upsert_lead(conn, self.brand, s["contact_id"], p.key, "product_selected")
         r = TurnResult("PACK", msgs, actions)
@@ -236,12 +276,31 @@ class Engine:
             return r2
         return r
 
-    def _pack_msg(self, p: Product, intro: str | None = None) -> Msg:
-        rows = [(f"pack:{v.label}", f"{v.label_hi} — {_inr(v.net_minor)}"[:24],
-                 ((f"MRP {_inr(v.price_minor)} • 🎁 {_inr(v.offer_minor)} छूट • " if v.offer_minor else "") + ("✅ उपलब्ध" if v.available else "स्टॉक पुष्टि लंबित"))[:72])
-                for v in p.variants if v.variant_id and v.price_minor]
-        head = (intro + "\n\n") if intro else ""
-        return Msg("list", head + "📦 *पैक चुनिए* 👇 (कीमत GST सहित)", rows=rows)
+    def _pack_msg(self, p: Product, card: bool = False) -> Msg:
+        """Owner's PACK & PRICE card (ghee / honey). Prices = live Shopify price minus owner-approved WhatsApp offer."""
+        import re as _re
+        vs = [v for v in p.variants if v.variant_id and v.price_minor]
+        lines, rows = [], []
+        for n, v in enumerate(vs, 1):
+            qty = _re.match(r"(\d+(?:\.\d+)?)", v.label)
+            per = ""
+            if p.key == "ghee" and qty and float(qty.group(1)) > 1:
+                per = f" ₹{int(v.net_minor / float(qty.group(1)) / 100):,} प्रति Ltr"
+            if p.key == "honey":
+                lines.append(f"> `{n}` •`{v.label}` • *{_inr(v.net_minor)}/-*")
+            else:
+                lines.append(f"> `{v.label}`  •  *{_inr(v.net_minor)}/-*{per}")
+            rows.append((f"pack:{v.label}", f"{v.label} • {_inr(v.net_minor)}/-"[:24],
+                         ((f"MRP {_inr(v.price_minor)} • {_inr(v.offer_minor)} छूट • " if v.offer_minor else "") + (per.strip() + " • " if per else "")
+                          + ("✅ उपलब्ध" if v.available else "स्टॉक पुष्टि लंबित"))[:72]))
+        if p.key == "ghee":
+            body = C.GHEE_HEAD + "\n>\n".join(lines) + "\n\n" + C.GHEE_TAIL
+            return Msg("list", body if card else "📦 *पैक चुनिए* 👇", rows=rows + C.GHEE_EXTRA_ROWS,
+                       numbered=[r[0] for r in C.GHEE_EXTRA_ROWS])
+        if p.key == "honey":
+            body = C.HONEY_HEAD + "\n".join(lines) + "\n" + C.HONEY_TAIL
+            return Msg("list", body if card else "📦 *अपना Honey Pack चुनिए* 👇", rows=rows)
+        return Msg("list", box(f"{ICON.get(p.key, '🌿')} *{p.title_hi}*") + f"\n{p.short_hi}\n\n📦 *पैक चुनिए* 👇", rows=rows)
 
     def _pack(self, conn, s, pack_label, actions) -> TurnResult:
         p = self.cat.get(s["product_key"])
@@ -410,14 +469,18 @@ def _numbered_choice(text_in: str, last_options_json: str | None) -> str | None:
     if not last_options_json:
         return None
     raw = json.loads(last_options_json)
-    ids, titles = (raw.get("ids") or [], raw.get("titles") or []) if isinstance(raw, dict) else (raw, [])
+    if isinstance(raw, dict):
+        ids = raw.get("ids") or []
+        pairs = raw.get("pairs") or list(zip(ids, raw.get("titles") or []))
+    else:
+        ids, pairs = raw, []
     t = (text_in or "").strip().translate(str.maketrans("०१२३४५६७८९", "0123456789"))
     if t.isdigit():
         n = int(t)
         return ids[n - 1] if 1 <= n <= len(ids) else None
     f = _fold(t)
     if f:
-        for i, title in zip(ids, titles):
+        for i, title in pairs:
             if _fold(title) == f:
                 return i
     return None

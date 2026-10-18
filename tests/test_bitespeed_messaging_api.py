@@ -71,7 +71,7 @@ def test_reply_channel_binds_phone_and_guards_apply(engine, build, fake_post):
         v, lst = fake_post[0]["json"], fake_post[1]["json"]
         assert v["messageType"] == "video" and v["media"]["link"].endswith("ghee-approved.mp4")
         assert lst["recipient"] == PHONE.lstrip("+") and lst["messageType"] == "interactive" and lst["interactive"]["type"] == "list"
-        assert [row["id"] for row in lst["interactive"]["action"]["sections"][0]["rows"]] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr"]
+        assert [row["id"] for row in lst["interactive"]["action"]["sections"][0]["rows"]] == ["pack:1 Ltr", "pack:5 Ltr", "pack:10 Ltr", "info:gir_ghee", "info:custom_qty"]
         assert all(len(row["title"]) <= 24 for row in lst["interactive"]["action"]["sections"][0]["rows"])
         assert lst["interactive"]["footer"]["text"] == "हर घर अमृत 🌿"
         assert lst["sourceContext"]["thirdPartyMessageId"].startswith("conv777-")
@@ -145,7 +145,7 @@ def test_flow_builder_turn_delivers_over_messaging_api_under_guards(monkeypatch,
     j = c.post("/bot/turn/t0k", json={"phone": PHONE, "text": "hi"}).json()
     assert j["delivery"]["status"] == "sent" and len(fake_post) == 1          # welcome menu as ONE native list
     body = fake_post[0]["json"]
-    assert body["recipient"] == PHONE.lstrip("+") and body["interactive"]["type"] == "list" and "AMRIT DAIRY" in body["interactive"]["body"]["text"]
+    assert body["recipient"] == PHONE.lstrip("+") and body["interactive"]["type"] == "list" and "राम राम जी" in body["interactive"]["body"]["text"]
     assert c.post("/bot/turn/wrong", json={"phone": PHONE, "text": "hi"}).status_code == 401
 
 
@@ -205,3 +205,40 @@ def test_outbox_order_confirmation_dict_is_sent_as_its_text(fake_post):
     s = BitespeedApiSender(bs.BitespeedMessagingClient(KEY, "917700004877", BASE))
     res = s.send("ord-1:engine_order_confirm", {"phone": PHONE, "message": Msg("text", "✅ ORDER CONFIRMED #1160").as_dict()})
     assert res.outcome == "sent" and fake_post[-1]["json"]["text"]["body"] == "✅ ORDER CONFIRMED #1160"
+
+
+
+def test_owner_menu_19_oct_and_new_cards(engine):
+    """Owner corrections 19 Oct: 7-option welcome; ghee `1`=SPECIAL GIR, `2`=CUSTOM QUANTITY; BKB / Location / Contact cards."""
+    from amrit_adapter.engine.state import Engine
+    from amrit_adapter.engine.catalog import Catalog
+    from amrit_adapter.engine.shopify_client import FakeShopifyClient
+    from amrit_adapter.engine import copy_amrit as C
+    from tests.conftest import BRAND
+    e = Engine(Catalog.load(), FakeShopifyClient(), BRAND)
+    with engine.begin() as c:
+        r = e.turn(c, "+919000000001", "hi")
+        m = r.messages[0]
+        assert m.type == "list" and "राम राम जी" in m.text
+        assert [x[1] for x in m.rows] == ["देसी गाय का घी", "शुद्ध देसी शहद", "गाय खरीदने/बेचने के लिए", "देशी दवाइयां",
+                                          "Order Track", "Amrit Dairy Location", "Contact Us"]
+        assert all(len(x[1]) <= 24 and len(x[2]) <= 72 for x in m.rows)
+        r = e.turn(c, "+919000000001", "4")                     # देशी दवाइयां
+        assert "*BABA JI KI BUTI*" in r.messages[0].text and [b[0] for b in r.messages[0].buttons] == ["info:bkb_order", "info:bkb_address", "info:bkb_contact"]
+        r = e.turn(c, "+919000000001", "1")
+        assert "babajikibuti.com" in r.messages[0].text
+        r = e.turn(c, "+919000000001", "menu"); r = e.turn(c, "+919000000001", "7")
+        assert all(n in r.messages[0].text for n in ("7700004877", "8059593666", "9873033339", "8570007678"))
+        r = e.turn(c, "+919000000001", "menu"); r = e.turn(c, "+919000000001", "6")
+        assert "AMRIT DAIRY LOCATION" in r.messages[0].text and "maps.google.com" in r.messages[0].text
+        r = e.turn(c, "+919000000001", "menu"); r = e.turn(c, "+919000000001", "1")
+        assert "*AMRIT GHEE*" in r.messages[-1].text and "Organic *Certified*" in r.messages[-1].text
+        r = e.turn(c, "+919000000001", "2")                     # owner numbering on the ghee card → CUSTOM QUANTITY
+        assert r.state == "CUSTOM_QTY" and "8570007678" in r.messages[0].text
+        r = e.turn(c, "+919000000001", "25 Ltr chahiye")
+        assert r.handoff and r.handoff_team == "Sales"
+        r2 = e.turn(c, "+919000000002", "shahad")
+        assert "*AMRIT HONEY*" in r2.messages[-1].text and "> `2` •`500 gm` • *₹800/-*" in r2.messages[-1].text
+        r3 = e.turn(c, "+919000000003", "gaay bechni hai")
+        r3 = e.turn(c, "+919000000003", "3")
+        assert "*COW जानकारी*" in r3.messages[0].text and r3.state == "COW_MENU"

@@ -57,7 +57,7 @@ def test_out_of_stock_or_unavailable_variant_is_not_quoted(engine, tmp_path):
     e2 = Engine(verified_catalog(tmp_path), shop2, BRAND)
     with engine.begin() as c:
         r = e2.turn(c, "+918814869007", "ghee")
-        assert "5 लीटर" in r.messages[-1].rows[1][1]
+        assert "5 Ltr" in r.messages[-1].rows[1][1]
         r = e2.turn(c, PHONE, button_id="pack:5 Ltr")
         assert r.state == "PACK" and "स्टॉक में नहीं" in r.messages[0].text   # refresh marked it unavailable before any quote
 
